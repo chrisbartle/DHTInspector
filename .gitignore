@@ -1,0 +1,11 @@
+build/
+build-*/
+AppDir/
+*.AppImage
+.qtcreator/
+CMakeLists.txt.user*
+CMakeUserPresets.json
+.vs/
+.vscode/
+.cache/
+compile_commands.json

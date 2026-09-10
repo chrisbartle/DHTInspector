@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DHT Diagnostics
+GenericName=Mainline DHT Diagnostic Tool
+Comment=Interrogate individual nodes and monitor the health of the mainline DHT
+Exec=DhtDiag
+Icon=dhtdiag
+Terminal=false
+Categories=Network;Development;
+Keywords=DHT;BitTorrent;Kademlia;Diagnostics;Network;
