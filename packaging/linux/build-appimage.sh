@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Builds a Linux AppImage of DHT Diagnostics.
+# Builds a Linux AppImage of DHT Inspector.
 #
 # Requires linuxdeploy and linuxdeploy-plugin-qt on PATH, and a Qt 6.5+
 # development install that CMake can find (set CMAKE_PREFIX_PATH if it is
@@ -32,4 +32,4 @@ linuxdeploy \
     --plugin qt \
     --output appimage
 
-echo "AppImage written to $(ls -1 "$PWD"/DHT_Diagnostics*.AppImage 2>/dev/null || echo "$PWD")"
+echo "AppImage written to $(ls -1 "$PWD"/DHT_Inspector*.AppImage 2>/dev/null || echo "$PWD")"

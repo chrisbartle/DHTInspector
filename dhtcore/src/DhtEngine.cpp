@@ -21,7 +21,7 @@ const QList<BootstrapRouter> &defaultBootstrapRouters()
 
 QByteArray clientVersion()
 {
-    return QByteArray("DG\x00\x01", 4);
+    return QByteArray("DI\x00\x01", 4);
 }
 
 // Member timers are parented to the engine so moveToThread() takes them

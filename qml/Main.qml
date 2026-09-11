@@ -12,7 +12,7 @@ ApplicationWindow {
     minimumWidth: 860
     minimumHeight: 560
     visible: true
-    title: qsTr("DHT Diagnostics")
+    title: qsTr("DHT Inspector")
     color: Theme.background
 
     header: Rectangle {
@@ -26,7 +26,7 @@ ApplicationWindow {
             spacing: Theme.spacingLarge
 
             Label {
-                text: qsTr("DHT Diagnostics")
+                text: qsTr("DHT Inspector")
                 color: Theme.text
                 font.pixelSize: Theme.fontSizeLarge
                 font.weight: Font.DemiBold

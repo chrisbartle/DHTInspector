@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(DhtDiag
+project(DHTInspector
     VERSION 0.1.0
     DESCRIPTION "Diagnostic tool for the mainline BitTorrent DHT"
     LANGUAGES CXX
@@ -24,24 +24,24 @@ if(QT_KNOWN_POLICY_QTP0004)
     qt_policy(SET QTP0004 NEW)
 endif()
 
-option(DHTDIAG_BUILD_TESTS "Build the dhtcore test suite" ON)
+option(DHTINSPECTOR_BUILD_TESTS "Build the dhtcore test suite" ON)
 
 add_subdirectory(dhtcore)
 
-if(DHTDIAG_BUILD_TESTS)
+if(DHTINSPECTOR_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
 
-qt_add_executable(DhtDiag
+qt_add_executable(DHTInspector
     src/main.cpp
 )
 
 # Must be set before qt_add_qml_module sees the file.
 set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 
-qt_add_qml_module(DhtDiag
-    URI DhtDiag
+qt_add_qml_module(DHTInspector
+    URI DHTInspector
     VERSION 1.0
     SOURCES
         src/DhtController.h src/DhtController.cpp
@@ -62,13 +62,13 @@ qt_add_qml_module(DhtDiag
         qml/ProbeNodePage.qml
 )
 
-target_include_directories(DhtDiag PRIVATE src)
+target_include_directories(DHTInspector PRIVATE src)
 
-target_compile_definitions(DhtDiag PRIVATE
-    DHTDIAG_VERSION="${PROJECT_VERSION}"
+target_compile_definitions(DHTInspector PRIVATE
+    DHTINSPECTOR_VERSION="${PROJECT_VERSION}"
 )
 
-target_link_libraries(DhtDiag PRIVATE
+target_link_libraries(DHTInspector PRIVATE
     dhtcore
     Qt6::Core
     Qt6::Gui
@@ -77,7 +77,7 @@ target_link_libraries(DhtDiag PRIVATE
     Qt6::QuickControls2
 )
 
-set_target_properties(DhtDiag PROPERTIES
+set_target_properties(DHTInspector PROPERTIES
     WIN32_EXECUTABLE ON
     MACOSX_BUNDLE ON
 )
@@ -88,17 +88,17 @@ set_target_properties(DhtDiag PROPERTIES
 # ---------------------------------------------------------------------------
 include(GNUInstallDirs)
 
-install(TARGETS DhtDiag
+install(TARGETS DHTInspector
     BUNDLE  DESTINATION .
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
 if(UNIX AND NOT APPLE)
-    install(FILES packaging/linux/dhtdiag.desktop
+    install(FILES packaging/linux/dhtinspector.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )
-    install(FILES packaging/linux/dhtdiag.svg
+    install(FILES packaging/linux/dhtinspector.svg
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps
     )
 endif()
@@ -107,7 +107,7 @@ endif()
 # build links everything into the executable and needs no deploy step.
 if(QT6_IS_SHARED_LIBS_BUILD)
     qt_generate_deploy_qml_app_script(
-        TARGET DhtDiag
+        TARGET DHTInspector
         OUTPUT_SCRIPT deploy_script
         MACOS_BUNDLE_POST_BUILD
         NO_UNSUPPORTED_PLATFORM_ERROR

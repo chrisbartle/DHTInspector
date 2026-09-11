@@ -1,4 +1,4 @@
-# DHT Diagnostics
+# DHT Inspector
 
 A cross-platform diagnostic tool for the mainline BitTorrent DHT (BEP 5), built
 with C++20, Qt 6 and QML.
@@ -40,7 +40,7 @@ Two jobs, one tool:
 - Stopping the engine destroys it: routing tables, stored peers and tokens are
   all discarded. The Setup tab keeps the node IDs that were in use, so a
   restart reuses them unless edited or randomised.
-- Identifies itself with client version `DG` + two version bytes.
+- Identifies itself with client version `DI` + two version bytes.
 
 Not yet implemented: BEP 33 (scrape), BEP 44 (arbitrary data), BEP 51
 (infohash sampling), UPnP port mapping.
@@ -60,7 +60,7 @@ dhtcore/             protocol engine, static library, Qt Core + Network only
   PortMapper         PCP (RFC 6887) with NAT-PMP (RFC 6886) fallback
   Gateway            default gateway discovery (Windows, Linux)
 src/                 application: QML-facing controller and node list model
-qml/                 QML module "DhtDiag"
+qml/                 QML module "DHTInspector"
 tests/               Qt Test suites, including a loopback multi-engine swarm
 packaging/linux/     .desktop file, icon, AppImage build script
 ```
@@ -77,7 +77,7 @@ cmake -S . -B build/win-static -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFI
 cmake --build build/win-static
 ```
 
-Produces a self-contained `build/win-static/DhtDiag.exe` with no Qt DLLs to
+Produces a self-contained `build/win-static/DHTInspector.exe` with no Qt DLLs to
 ship alongside it.
 
 ## Building on Linux
@@ -92,7 +92,7 @@ been compiled or run on Linux.
 
 ## Tests
 
-Built by default; turn off with `-DDHTDIAG_BUILD_TESTS=OFF`.
+Built by default; turn off with `-DDHTINSPECTOR_BUILD_TESTS=OFF`.
 
 ```bash
 cmake --build build/win-static --target dhtcore_tests

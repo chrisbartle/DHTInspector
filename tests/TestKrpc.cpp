@@ -43,7 +43,7 @@ void TestKrpc::queryRoundTrip()
     const NodeId id = NodeId::random();
     BValue::Dict args;
     args.emplace("id", BValue(id.toBytes()));
-    const QByteArray version("DG\x00\x01", 4);
+    const QByteArray version("DI\x00\x01", 4);
     const auto r = krpc::parse(krpc::encodeQuery("xy", "find_node", std::move(args), version));
     QVERIFY(r.message);
     QCOMPARE(r.message->method, QByteArray("find_node"));

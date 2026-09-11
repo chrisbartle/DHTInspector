@@ -37,7 +37,7 @@ struct BootstrapRouter
 
 const QList<BootstrapRouter> &defaultBootstrapRouters();
 
-// Our KRPC "v" value: client code "DG" plus a two-byte version.
+// Our KRPC "v" value: client code "DI" plus a two-byte version.
 QByteArray clientVersion();
 
 // The whole engine: one DhtNode per enabled family, shared peer storage and
