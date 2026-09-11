@@ -5,33 +5,65 @@ with C++20, Qt 6 and QML.
 
 Two jobs, one tool:
 
-- **Probe Node** — point at a single `address:port` and characterise it:
+- **Probe Node**: point at a single `address:port` and characterise it:
   reachability, protocol conformance, node ID validity, and which extensions it
   actually speaks.
-- **Global Health** — run a node of our own and measure the population:
+- **Global Health**: run a node of our own and measure the population:
   size estimation, lookup performance, churn, client mix, ID-space coverage.
 
 ## Status
 
-Early. This is UI scaffolding only — three tabs with their intended structure
-laid out, and no engine behind any of it. Nothing touches the network yet.
+| Area | State |
+|---|---|
+| DHT engine (`dhtcore`) | Working: BEP 5, BEP 32, BEP 42, BEP 43 handling, peer storage |
+| Port forwarding | Working against test gateways: PCP with NAT-PMP fallback |
+| Setup tab | Working |
+| Global Health tab | Layout only |
+| Probe Node tab | Layout only |
+
+### What the engine does
+
+- Runs one node per enabled address family (BEP 32), each with its own UDP
+  socket, routing table and node ID. IPv6 is off by default.
+- Never joins on its own. Nodes are added by hand, or by contacting the
+  well-known bootstrap routers. Routers are used to join but never enter the
+  routing table.
+- Answers `ping`, `find_node`, `get_peers` and `announce_peer`, honours BEP 32
+  `want`, and stores announced peers for 30 minutes.
+- Includes BEP 42 `ip` in every response, establishes its own external address
+  by majority of what other nodes report, and switches to a BEP 42 compliant ID
+  for it once agreed. Local-network addresses are exempt.
+- Only adds a node to the routing table after it answers one of our queries,
+  keeps at most one node per public IP, and rate-limits queries per source.
+- Stopping the engine destroys it: routing tables, stored peers, tokens and
+  node IDs are all discarded.
+- Identifies itself with client version `DG` + two version bytes.
+
+Not yet implemented: BEP 33 (scrape), BEP 44 (arbitrary data), BEP 51
+(infohash sampling), UPnP port mapping.
 
 ## Layout
 
 ```
-src/                 application entry point
+dhtcore/             protocol engine, static library, Qt Core + Network only
+  Bencode            observing decoder: reports non-canonical input as warnings
+  Krpc               message codec, compact node/peer encoding
+  NodeId, Bep42      160-bit IDs, CRC32C, BEP 42 generation and checks
+  RoutingTable       k-buckets with splitting, replacement cache, node states
+  RpcManager         transactions and timeouts
+  Lookup             iterative find_node / get_peers
+  DhtNode            one node on one address family
+  DhtEngine          nodes + storage + port mapping; the public entry point
+  PortMapper         PCP (RFC 6887) with NAT-PMP (RFC 6886) fallback
+  Gateway            default gateway discovery (Windows, Linux)
+src/                 application: QML-facing controller and node list model
 qml/                 QML module "DhtDiag"
-  Theme.qml          singleton: colours, metrics, fonts
-  Main.qml           window, tab bar, status bar
-  Panel.qml          titled card container
-  LabeledField.qml   read-only "label: value" row
-  EmptyState.qml     placeholder for a view with no data yet
-  *Page.qml          one per tab
+tests/               Qt Test suites, including a loopback multi-engine swarm
 packaging/linux/     .desktop file, icon, AppImage build script
 ```
 
-The protocol engine will land as a separate `dhtcore` static library that links
-Qt Core only — no Gui, no Qml — so it stays headless-testable.
+The engine runs on its own thread. `DhtController` owns that thread and talks
+to the engine through queued calls; the UI only ever sees copied snapshots.
 
 ## Building on Windows (static Qt, MSVC)
 
@@ -42,8 +74,8 @@ cmake -S . -B build/win-static -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFI
 cmake --build build/win-static
 ```
 
-Produces a self-contained `build/win-static/DhtDiag.exe` (~30 MB) with no Qt
-DLLs to ship alongside it.
+Produces a self-contained `build/win-static/DhtDiag.exe` with no Qt DLLs to
+ship alongside it.
 
 ## Building on Linux
 
@@ -51,6 +83,22 @@ DLLs to ship alongside it.
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
+
+Gateway discovery on Linux reads `/proc/net/route`. That code path has not yet
+been compiled or run on Linux.
+
+## Tests
+
+Built by default; turn off with `-DDHTDIAG_BUILD_TESTS=OFF`.
+
+```bash
+cmake --build build/win-static --target dhtcore_tests
+```
+
+Run `dhtcore_tests` from the build directory. Each suite also writes
+`<Suite>.log` there, because on the static Windows build QTest's console
+output is lost when stdout is redirected. The engine suite binds loopback
+sockets only and never touches the public network.
 
 ## AppImage
 
@@ -67,10 +115,12 @@ resolve imports and bundle the right Qt QML modules.
 ## Notes
 
 - Qt 6.5 is the declared minimum; 6.10.1 is what this is developed against.
-- The Controls style is pinned to **Basic** in `main.cpp`. It is the only style
-  guaranteed to be linked into a static build, and everything visual comes from
-  `Theme.qml` rather than from the platform style — so Windows and Linux render
-  identically.
+- The Controls style is pinned to **Basic** in `main.cpp`, and everything
+  visual comes from `Theme.qml`, so Windows and Linux render identically.
+  (A static build links every Controls style; Basic is a choice for
+  consistency, not a static-linking constraint.)
+- Settings (port, IPv6, port forwarding) persist via `QSettings`. Whether the
+  engine is running does not: it is always off at launch.
 - Configuring against the static Qt emits a few `QtFeature.cmake` warnings
   about `Qt6::ScxmlGlobalPrivate`. They come from that Qt install's own package
   metadata, not from this project, and are harmless.

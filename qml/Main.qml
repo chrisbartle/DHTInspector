@@ -120,11 +120,15 @@ ApplicationWindow {
                 implicitWidth: 8
                 implicitHeight: 8
                 radius: 4
-                color: Theme.textFaint
+                color: DhtController.running ? Theme.good : DhtController.lastError !== "" ? Theme.bad : Theme.textFaint
             }
 
             Label {
-                text: qsTr("Engine stopped")
+                text: DhtController.running
+                      ? qsTr("%1 · %2 nodes").arg(DhtController.statusText).arg(DhtController.ipv4.nodeCount + DhtController.ipv6.nodeCount)
+                      : DhtController.statusText
+                elide: Text.ElideRight
+                Layout.maximumWidth: root.width * 0.7
                 color: Theme.textDim
                 font.pixelSize: Theme.fontSizeSmall
             }

@@ -1,0 +1,300 @@
+#include "dhtcore/DhtEngine.h"
+
+#include <QHostInfo>
+#include <QPointer>
+
+#include <algorithm>
+#include <memory>
+
+namespace dht {
+
+const QList<BootstrapRouter> &defaultBootstrapRouters()
+{
+    static const QList<BootstrapRouter> routers = {
+        {QStringLiteral("router.bittorrent.com"), 6881},
+        {QStringLiteral("router.utorrent.com"), 6881},
+        {QStringLiteral("dht.transmissionbt.com"), 6881},
+        {QStringLiteral("dht.libtorrent.org"), 25401},
+    };
+    return routers;
+}
+
+QByteArray clientVersion()
+{
+    return QByteArray("DG\x00\x01", 4);
+}
+
+// Member timers are parented to the engine so moveToThread() takes them
+// along; the application runs the engine on a worker thread.
+DhtEngine::DhtEngine(QObject *parent)
+    : QObject(parent)
+    , m_snapshotTimer(this)
+    , m_coalesceTimer(this)
+    , m_expiryTimer(this)
+{
+    m_coalesceTimer.setSingleShot(true);
+    m_coalesceTimer.setInterval(150);
+    connect(&m_coalesceTimer, &QTimer::timeout, this, &DhtEngine::publishSnapshot);
+    connect(&m_snapshotTimer, &QTimer::timeout, this, &DhtEngine::publishSnapshot);
+    connect(&m_expiryTimer, &QTimer::timeout, this, [this] { m_storage.expire(nowMs()); });
+}
+
+DhtEngine::~DhtEngine()
+{
+    shutdown();
+}
+
+bool DhtEngine::start(const EngineConfig &config, QString *error)
+{
+    if (m_running)
+        return true;
+    m_config = config;
+
+    NodeConfig v4;
+    v4.family = Family::IPv4;
+    v4.bindAddress = config.bindAddressV4;
+    v4.port = config.port;
+    v4.allowLocalAddresses = config.allowLocalAddresses;
+    v4.version = clientVersion();
+
+    m_v4 = new DhtNode(v4, &m_storage, this);
+    if (!m_v4->bind(error)) {
+        delete m_v4;
+        m_v4 = nullptr;
+        return false;
+    }
+    connect(m_v4, &DhtNode::changed, this, &DhtEngine::scheduleSnapshot);
+
+    if (config.enableIpv6) {
+        NodeConfig v6 = v4;
+        v6.family = Family::IPv6;
+        v6.bindAddress = config.bindAddressV6;
+        v6.port = m_v4->port(); // same port number on both families
+        m_v6 = new DhtNode(v6, &m_storage, this);
+        if (m_v6->bind(&m_v6Error)) {
+            connect(m_v6, &DhtNode::changed, this, &DhtEngine::scheduleSnapshot);
+            m_v4->setSibling(m_v6);
+            m_v6->setSibling(m_v4);
+        } else {
+            delete m_v6;
+            m_v6 = nullptr;
+            emit notice(m_v6Error, true);
+        }
+    }
+
+    m_mapper = new PortMapper(this);
+    connect(m_mapper, &PortMapper::changed, this, &DhtEngine::scheduleSnapshot);
+    if (config.portForwarding)
+        m_mapper->start(m_v4->port());
+
+    m_running = true;
+    m_snapshotTimer.start(std::max(100, config.snapshotIntervalMs));
+    m_expiryTimer.start(60 * 1000);
+    publishSnapshot();
+    return true;
+}
+
+void DhtEngine::shutdown()
+{
+    if (!m_running)
+        return;
+    m_running = false;
+
+    m_snapshotTimer.stop();
+    m_coalesceTimer.stop();
+    m_expiryTimer.stop();
+
+    if (m_mapper) {
+        m_mapper->disconnect(this);
+        m_mapper->stop(); // releases the gateway mapping while the socket still exists
+        delete m_mapper;
+        m_mapper = nullptr;
+    }
+    const auto destroy = [this](DhtNode *&node) {
+        if (!node)
+            return;
+        node->disconnect(this);
+        node->close();
+        delete node;
+        node = nullptr;
+    };
+    destroy(m_v6);
+    destroy(m_v4);
+    m_storage.clear();
+    m_v6Error.clear();
+}
+
+bool DhtEngine::addSeed(const Endpoint &endpoint, DhtNode::SeedSource source)
+{
+    DhtNode *target = node(endpoint.family());
+    if (!target)
+        return false;
+    target->addSeed(endpoint, source);
+    return true;
+}
+
+void DhtEngine::addNode(const QString &host, quint16 port)
+{
+    if (!m_running)
+        return;
+
+    QHostAddress literal;
+    if (literal.setAddress(host)) {
+        const Endpoint endpoint(literal, port);
+        if (addSeed(endpoint, DhtNode::SeedSource::Injected))
+            emit notice(QStringLiteral("Contacting %1").arg(endpoint.toString()), false);
+        else
+            emit notice(QStringLiteral("%1 is disabled, cannot contact %2")
+                            .arg(familyName(endpoint.family()), endpoint.toString()),
+                        true);
+        return;
+    }
+
+    emit notice(QStringLiteral("Resolving %1").arg(host), false);
+    QPointer<DhtEngine> self(this);
+    QHostInfo::lookupHost(host, this, [self, host, port](const QHostInfo &info) {
+        if (!self || !self->m_running)
+            return;
+        if (info.error() != QHostInfo::NoError || info.addresses().isEmpty()) {
+            emit self->notice(QStringLiteral("Could not resolve %1: %2").arg(host, info.errorString()), true);
+            return;
+        }
+        int added = 0;
+        for (const QHostAddress &address : info.addresses())
+            added += self->addSeed(Endpoint(address, port), DhtNode::SeedSource::Injected) ? 1 : 0;
+        if (added == 0)
+            emit self->notice(QStringLiteral("%1 has no addresses in an enabled address family").arg(host), true);
+        else
+            emit self->notice(QStringLiteral("Contacting %1 (%2 address%3)").arg(host).arg(added).arg(added == 1 ? "" : "es"), false);
+    });
+}
+
+void DhtEngine::bootstrap()
+{
+    if (!m_running)
+        return;
+
+    const auto &routers = defaultBootstrapRouters();
+    emit notice(QStringLiteral("Resolving %1 bootstrap routers").arg(routers.size()), false);
+
+    QPointer<DhtEngine> self(this);
+    for (const BootstrapRouter &router : routers) {
+        QHostInfo::lookupHost(router.host, this, [self, router](const QHostInfo &info) {
+            if (!self || !self->m_running)
+                return;
+            int added = 0;
+            if (info.error() == QHostInfo::NoError) {
+                for (const QHostAddress &address : info.addresses())
+                    added += self->addSeed(Endpoint(address, router.port), DhtNode::SeedSource::Bootstrap) ? 1 : 0;
+            }
+            if (added == 0)
+                emit self->notice(QStringLiteral("Could not resolve bootstrap router %1").arg(router.host), true);
+        });
+    }
+}
+
+void DhtEngine::setPortForwarding(bool enabled)
+{
+    m_config.portForwarding = enabled;
+    if (!m_running || !m_mapper)
+        return;
+    if (enabled)
+        m_mapper->start(m_v4->port());
+    else
+        m_mapper->stop();
+    scheduleSnapshot();
+}
+
+void DhtEngine::getPeers(const NodeId &infohash, std::function<void(const std::vector<Endpoint> &)> done)
+{
+    struct State
+    {
+        int remaining = 0;
+        std::vector<Endpoint> peers;
+    };
+    auto state = std::make_shared<State>();
+    const auto finishOne = [state, done](const Lookup::Result &result) {
+        state->peers.insert(state->peers.end(), result.peers.begin(), result.peers.end());
+        if (--state->remaining == 0 && done)
+            done(state->peers);
+    };
+
+    const DhtNode *nodes[] = {m_v4, m_v6};
+    for (const DhtNode *n : nodes)
+        state->remaining += n ? 1 : 0;
+    if (state->remaining == 0) {
+        if (done)
+            done({});
+        return;
+    }
+    if (m_v4)
+        m_v4->getPeers(infohash, finishOne);
+    if (m_v6)
+        m_v6->getPeers(infohash, finishOne);
+}
+
+void DhtEngine::announce(const NodeId &infohash, quint16 port, bool impliedPort, std::function<void(int)> done)
+{
+    auto remaining = std::make_shared<int>((m_v4 ? 1 : 0) + (m_v6 ? 1 : 0));
+    auto accepted = std::make_shared<int>(0);
+    if (*remaining == 0) {
+        if (done)
+            done(0);
+        return;
+    }
+    const auto finishOne = [remaining, accepted, done](int count) {
+        *accepted += count;
+        if (--*remaining == 0 && done)
+            done(*accepted);
+    };
+    if (m_v4)
+        m_v4->announce(infohash, port, impliedPort, finishOne);
+    if (m_v6)
+        m_v6->announce(infohash, port, impliedPort, finishOne);
+}
+
+EngineSnapshot DhtEngine::snapshot() const
+{
+    EngineSnapshot s;
+    s.running = m_running;
+    if (!m_running)
+        return s;
+
+    const qint64 now = nowMs();
+    if (m_v4) {
+        s.ipv4 = m_v4->familySnapshot();
+        s.stats.add(m_v4->stats());
+        m_v4->appendNodeRows(s.nodes, now);
+    }
+    if (m_v6) {
+        s.ipv6 = m_v6->familySnapshot();
+        s.stats.add(m_v6->stats());
+        m_v6->appendNodeRows(s.nodes, now);
+    } else {
+        s.ipv6.enabled = m_config.enableIpv6;
+        s.ipv6.error = m_v6Error;
+    }
+    if (m_mapper)
+        s.portMapping = m_mapper->snapshot();
+
+    s.stats.storedInfohashes = m_storage.infohashCount();
+    s.stats.storedPeers = m_storage.peerCount();
+
+    std::sort(s.nodes.begin(), s.nodes.end(),
+              [](const NodeRow &a, const NodeRow &b) { return a.sortKey < b.sortKey; });
+    return s;
+}
+
+void DhtEngine::scheduleSnapshot()
+{
+    if (m_running && !m_coalesceTimer.isActive())
+        m_coalesceTimer.start();
+}
+
+void DhtEngine::publishSnapshot()
+{
+    if (m_running)
+        emit snapshotReady(snapshot());
+}
+
+} // namespace dht

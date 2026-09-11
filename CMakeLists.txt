@@ -14,7 +14,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network Gui Qml Quick QuickControls2)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -22,6 +22,15 @@ qt_standard_project_setup(REQUIRES 6.5)
 # qmldir files for it rather than hand-maintaining them.
 if(QT_KNOWN_POLICY_QTP0004)
     qt_policy(SET QTP0004 NEW)
+endif()
+
+option(DHTDIAG_BUILD_TESTS "Build the dhtcore test suite" ON)
+
+add_subdirectory(dhtcore)
+
+if(DHTDIAG_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 qt_add_executable(DhtDiag
@@ -34,22 +43,33 @@ set_source_files_properties(qml/Theme.qml PROPERTIES QT_QML_SINGLETON_TYPE TRUE)
 qt_add_qml_module(DhtDiag
     URI DhtDiag
     VERSION 1.0
+    SOURCES
+        src/DhtController.h src/DhtController.cpp
+        src/NodeListModel.h src/NodeListModel.cpp
+        src/StatusTypes.h
     QML_FILES
         qml/Main.qml
         qml/Theme.qml
         qml/LabeledField.qml
         qml/Panel.qml
+        qml/Badge.qml
+        qml/ThemedButton.qml
+        qml/ThemedSwitch.qml
+        qml/ThemedTextField.qml
         qml/EmptyState.qml
         qml/SetupPage.qml
         qml/GlobalHealthPage.qml
         qml/ProbeNodePage.qml
 )
 
+target_include_directories(DhtDiag PRIVATE src)
+
 target_compile_definitions(DhtDiag PRIVATE
     DHTDIAG_VERSION="${PROJECT_VERSION}"
 )
 
 target_link_libraries(DhtDiag PRIVATE
+    dhtcore
     Qt6::Core
     Qt6::Gui
     Qt6::Qml

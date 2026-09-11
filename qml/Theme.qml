@@ -34,4 +34,47 @@ QtObject {
     readonly property string monoFamily: Qt.platform.os === "windows" ? "Consolas"
                                        : Qt.platform.os === "osx"     ? "Menlo"
                                                                       : "monospace"
+
+    function nodeStatusColor(status) {
+        switch (status) {
+        case "good":
+        case "responded":
+            return good
+        case "questionable":
+            return warn
+        case "bad":
+        case "no response":
+            return bad
+        case "querying":
+            return accent
+        default:
+            return textDim
+        }
+    }
+
+    function bep42Color(state) {
+        switch (state) {
+        case "compliant":
+            return good
+        case "noncompliant":
+            return bad
+        case "exempt":
+            return textDim
+        default:
+            return textFaint
+        }
+    }
+
+    function bep42Text(state) {
+        switch (state) {
+        case "compliant":
+            return qsTr("BEP 42 compliant")
+        case "noncompliant":
+            return qsTr("Not BEP 42 compliant")
+        case "exempt":
+            return qsTr("BEP 42 exempt: local address")
+        default:
+            return qsTr("BEP 42 unknown: external address not established")
+        }
+    }
 }

@@ -1,0 +1,585 @@
+#include "dhtcore/DhtNode.h"
+
+#include <QNetworkDatagram>
+#include <QUdpSocket>
+#include <QVariant>
+
+#include <memory>
+
+namespace dht {
+
+namespace {
+
+constexpr int MaintenanceIntervalMs = 5000;
+constexpr qint64 PingIntervalMs = 60 * 1000;
+constexpr qint64 BucketRefreshMs = 15 * 60 * 1000;
+constexpr qint64 VerificationWindowMs = 10 * 60 * 1000;
+constexpr int MaxPendingVerifications = 2000;
+
+QByteArray sortKeyFor(Family family, bool hasId, const NodeId &id, const NodeId &self, const Endpoint &endpoint)
+{
+    QByteArray key;
+    key += char(family == Family::IPv4 ? 0 : 1);
+    key += char(hasId ? 0 : 1);
+    key += hasId ? (id ^ self).toBytes() : QByteArray(NodeId::Size, char(0xff));
+    key += endpoint.toString().toUtf8();
+    return key;
+}
+
+} // namespace
+
+DhtNode::DhtNode(const NodeConfig &config, PeerStorage *storage, QObject *parent)
+    : QObject(parent)
+    , m_config(config)
+    , m_storage(storage)
+    , m_id(NodeId::random())
+    , m_table(m_id)
+    , m_maintenance(this)
+{
+    connect(&m_maintenance, &QTimer::timeout, this, &DhtNode::onMaintenance);
+}
+
+DhtNode::~DhtNode()
+{
+    close();
+}
+
+bool DhtNode::bind(QString *error)
+{
+    QHostAddress address = m_config.bindAddress;
+    if (address.isNull())
+        address = QHostAddress(m_config.family == Family::IPv4 ? QHostAddress::AnyIPv4 : QHostAddress::AnyIPv6);
+
+    m_socket = new QUdpSocket(this);
+    // DontShareAddress makes a port clash with another client fail loudly
+    // (on Windows the default would silently share the port).
+    if (!m_socket->bind(address, m_config.port, QAbstractSocket::DontShareAddress)) {
+        if (error) {
+            *error = QStringLiteral("Could not bind %1 port %2: %3")
+                         .arg(familyName(m_config.family))
+                         .arg(m_config.port)
+                         .arg(m_socket->errorString());
+        }
+        delete m_socket;
+        m_socket = nullptr;
+        return false;
+    }
+    m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, QVariant(1 << 20));
+    connect(m_socket, &QUdpSocket::readyRead, this, &DhtNode::onReadyRead);
+
+    m_rpc = new RpcManager([this](const QByteArray &data, const Endpoint &to) { sendDatagram(data, to); }, this);
+    m_maintenance.start(MaintenanceIntervalMs);
+    return true;
+}
+
+void DhtNode::close()
+{
+    m_maintenance.stop();
+    if (m_rpc)
+        m_rpc->cancelAll();
+    if (m_socket) {
+        m_socket->disconnect(this);
+        m_socket->close();
+    }
+}
+
+quint16 DhtNode::port() const
+{
+    return m_socket ? m_socket->localPort() : 0;
+}
+
+void DhtNode::setId(const NodeId &id)
+{
+    m_id = id;
+    m_table.rebuild(id, nowMs());
+    emit changed();
+}
+
+// --- Outgoing ---------------------------------------------------------------
+
+void DhtNode::sendDatagram(const QByteArray &data, const Endpoint &to)
+{
+    if (!m_socket || m_socket->state() != QAbstractSocket::BoundState)
+        return;
+    if (m_socket->writeDatagram(data, to.address, to.port) >= 0) {
+        ++m_stats.packetsOut;
+        m_stats.bytesOut += data.size();
+    }
+}
+
+void DhtNode::sendQuery(const Endpoint &to, const QByteArray &method, BValue::Dict arguments,
+                        RpcManager::Callback callback)
+{
+    if (!m_rpc)
+        return;
+    arguments.insert_or_assign("id", BValue(m_id.toBytes()));
+    ++m_stats.queriesOut;
+    QPointer<DhtNode> self(this);
+    m_rpc->query(to, method, std::move(arguments), m_config.version,
+                 [self, callback = std::move(callback)](const RpcReply &reply) {
+                     if (!self)
+                         return;
+                     self->onRpcReply(reply);
+                     if (callback)
+                         callback(reply);
+                 });
+}
+
+void DhtNode::sendResponse(const krpc::Message &query, const Endpoint &to, BValue::Dict values)
+{
+    values.insert_or_assign("id", BValue(m_id.toBytes()));
+    sendDatagram(krpc::encodeResponse(query.transactionId, std::move(values), m_config.version, to), to);
+}
+
+void DhtNode::sendError(const QByteArray &transactionId, const Endpoint &to, int code, const QByteArray &message)
+{
+    sendDatagram(krpc::encodeError(transactionId, code, message, m_config.version), to);
+}
+
+// --- Incoming ---------------------------------------------------------------
+
+void DhtNode::onReadyRead()
+{
+    while (m_socket && m_socket->hasPendingDatagrams()) {
+        const QNetworkDatagram datagram = m_socket->receiveDatagram();
+        if (!datagram.isValid())
+            continue;
+        const QByteArray data = datagram.data();
+        ++m_stats.packetsIn;
+        m_stats.bytesIn += data.size();
+        handleDatagram(data, Endpoint(datagram.senderAddress(), quint16(datagram.senderPort())));
+    }
+}
+
+void DhtNode::handleDatagram(const QByteArray &data, const Endpoint &from)
+{
+    const krpc::ParseResult parsed = krpc::parse(data);
+    if (!parsed.message) {
+        ++m_stats.malformedIn;
+        return;
+    }
+    const krpc::Message &message = *parsed.message;
+    if (message.type == krpc::MessageType::Query)
+        handleQuery(message, from);
+    else if (m_rpc)
+        m_rpc->handleReply(message, from);
+}
+
+void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from)
+{
+    const qint64 now = nowMs();
+    if (!m_limiter.allow(from.address, now)) {
+        ++m_stats.rateLimited;
+        return;
+    }
+    ++m_stats.queriesIn;
+
+    const auto senderId = message.senderId();
+    if (!senderId) {
+        sendError(message.transactionId, from, krpc::ProtocolError, "missing or invalid id");
+        return;
+    }
+
+    // BEP 43: read-only nodes must not be added to routing tables.
+    if (!message.readOnly && *senderId != m_id && !m_table.queriedBy(*senderId, from, now))
+        maybeVerify(*senderId, from, now);
+
+    const QByteArray &method = message.method;
+    const BValue &args = message.body;
+
+    if (method == "ping") {
+        sendResponse(message, from, {});
+        return;
+    }
+
+    if (method == "find_node") {
+        const auto target = NodeId::fromBytes(args.stringAt("target").value_or(QByteArray()));
+        if (!target) {
+            sendError(message.transactionId, from, krpc::ProtocolError, "missing or invalid target");
+            return;
+        }
+        sendResponse(message, from, nodesFor(*target, args));
+        return;
+    }
+
+    if (method == "get_peers") {
+        const auto infohash = NodeId::fromBytes(args.stringAt("info_hash").value_or(QByteArray()));
+        if (!infohash) {
+            sendError(message.transactionId, from, krpc::ProtocolError, "missing or invalid info_hash");
+            return;
+        }
+        BValue::Dict values = nodesFor(*infohash, args);
+        values.insert_or_assign("token", BValue(m_tokens.generate(from.address, now)));
+        const int maxPeers = m_config.family == Family::IPv4 ? 100 : 50;
+        const auto peers = m_storage->peers(*infohash, m_config.family, maxPeers);
+        if (!peers.empty()) {
+            BValue::List list;
+            for (const Endpoint &peer : peers)
+                list.push_back(BValue(peer.toCompact()));
+            values.insert_or_assign("values", BValue(std::move(list)));
+        }
+        sendResponse(message, from, std::move(values));
+        return;
+    }
+
+    if (method == "announce_peer") {
+        const auto infohash = NodeId::fromBytes(args.stringAt("info_hash").value_or(QByteArray()));
+        if (!infohash) {
+            sendError(message.transactionId, from, krpc::ProtocolError, "missing or invalid info_hash");
+            return;
+        }
+        const auto token = args.stringAt("token");
+        if (!token || !m_tokens.validate(*token, from.address, now)) {
+            sendError(message.transactionId, from, krpc::ProtocolError, "invalid token");
+            return;
+        }
+        const bool implied = args.integerAt("implied_port").value_or(0) == 1;
+        const qint64 port = implied ? from.port : args.integerAt("port").value_or(0);
+        if (port < 1 || port > 65535) {
+            sendError(message.transactionId, from, krpc::ProtocolError, "invalid port");
+            return;
+        }
+        m_storage->announce(*infohash, Endpoint(from.address, quint16(port)), now);
+        sendResponse(message, from, {});
+        emit changed();
+        return;
+    }
+
+    sendError(message.transactionId, from, krpc::MethodUnknown, "Method Unknown");
+}
+
+BValue::Dict DhtNode::nodesFor(const NodeId &target, const BValue &arguments) const
+{
+    bool want4 = m_config.family == Family::IPv4;
+    bool want6 = m_config.family == Family::IPv6;
+    if (const BValue *want = arguments.listAt("want")) {
+        bool any4 = false;
+        bool any6 = false;
+        for (const BValue &item : want->toList()) {
+            any4 = any4 || item.toString() == "n4";
+            any6 = any6 || item.toString() == "n6";
+        }
+        if (any4 || any6) {
+            want4 = any4;
+            want6 = any6;
+        }
+    }
+
+    BValue::Dict out;
+    const auto fill = [&](const DhtNode *node, Family family, const char *key) {
+        if (!node)
+            return;
+        const auto nodes = node->closestNodes(target, RoutingTable::K);
+        if (!nodes.empty())
+            out.insert_or_assign(key, BValue(krpc::encodeNodes(nodes, family)));
+    };
+    if (want4)
+        fill(m_config.family == Family::IPv4 ? this : m_sibling.data(), Family::IPv4, "nodes");
+    if (want6)
+        fill(m_config.family == Family::IPv6 ? this : m_sibling.data(), Family::IPv6, "nodes6");
+    return out;
+}
+
+// --- Replies ---------------------------------------------------------------
+
+bool DhtNode::isRouter(const Endpoint &endpoint) const
+{
+    const auto it = m_seeds.constFind(endpoint);
+    return it != m_seeds.constEnd() && it->source == SeedSource::Bootstrap;
+}
+
+void DhtNode::onRpcReply(const RpcReply &reply)
+{
+    const qint64 now = nowMs();
+    switch (reply.status) {
+    case RpcReply::Status::Timeout:
+        ++m_stats.timeouts;
+        m_table.failed(reply.from, now);
+        return;
+    case RpcReply::Status::Error:
+        ++m_stats.errorsIn;
+        return;
+    case RpcReply::Status::Response:
+        break;
+    }
+
+    ++m_stats.responsesIn;
+    const krpc::Message &message = reply.message;
+
+    if (message.reportedAddress && message.reportedAddress->family() == m_config.family) {
+        if (m_voter.addVote(reply.from.address, message.reportedAddress->address, now))
+            adoptExternalAddress(m_voter.consensus());
+    }
+
+    const auto id = message.senderId();
+    if (!id) {
+        ++m_stats.malformedIn;
+        return;
+    }
+    if (!isRouter(reply.from) && !message.readOnly)
+        m_table.heardFrom(*id, reply.from, message.version, reply.rttMs, now);
+}
+
+void DhtNode::maybeVerify(const NodeId &id, const Endpoint &from, qint64 now)
+{
+    // Nodes that query us only enter the table after answering a ping, so a
+    // spoofed source address cannot plant entries.
+    if (!isUsableRemote(from, m_config.allowLocalAddresses) || !m_table.wouldAccept(id))
+        return;
+    const auto it = m_recentVerifications.constFind(from);
+    if (it != m_recentVerifications.constEnd() && now - *it < VerificationWindowMs)
+        return;
+    if (m_recentVerifications.size() >= MaxPendingVerifications)
+        return;
+    m_recentVerifications.insert(from, now);
+    sendQuery(from, "ping", {}, nullptr);
+}
+
+void DhtNode::adoptExternalAddress(const QHostAddress &address)
+{
+    emit changed();
+    if (bep42::isExempt(address) || bep42::isCompliant(m_id, address))
+        return;
+
+    // BEP 42: take an ID derived from our external address, then rejoin
+    // around it.
+    setId(bep42::generate(address));
+    startLookup(Lookup::Kind::FindNode, m_id, nullptr);
+}
+
+// --- Seeds and lookups -----------------------------------------------------
+
+void DhtNode::addSeed(const Endpoint &endpoint, SeedSource source)
+{
+    if (!endpoint.isValid() || endpoint.family() != m_config.family)
+        return;
+
+    Seed &seed = m_seeds[endpoint];
+    if (source == SeedSource::Injected)
+        seed.source = SeedSource::Injected;
+    else if (seed.state == Seed::State::Querying && seed.lastAttempt == 0)
+        seed.source = source;
+    seed.state = Seed::State::Querying;
+    seed.lastAttempt = nowMs();
+    emit changed();
+
+    BValue::Dict args;
+    args.emplace("target", BValue(m_id.toBytes()));
+    QPointer<DhtNode> self(this);
+    sendQuery(endpoint, "find_node", std::move(args), [self, endpoint](const RpcReply &reply) {
+        if (!self)
+            return;
+        const auto it = self->m_seeds.find(endpoint);
+        if (it == self->m_seeds.end())
+            return;
+
+        if (reply.status == RpcReply::Status::Timeout) {
+            it->state = Seed::State::NoResponse;
+            emit self->changed();
+            return;
+        }
+
+        it->state = Seed::State::Responded;
+        it->rttMs = reply.rttMs;
+        it->version = reply.message.version;
+        if (const auto id = reply.message.senderId()) {
+            it->id = *id;
+            it->hasId = true;
+        }
+
+        if (reply.status == RpcReply::Status::Response) {
+            const QByteArray key = self->m_config.family == Family::IPv4 ? QByteArray("nodes") : QByteArray("nodes6");
+            std::vector<krpc::CompactNode> nodes;
+            if (const auto bytes = reply.message.body.stringAt(key))
+                nodes = krpc::decodeNodes(*bytes, self->m_config.family).nodes;
+
+            if (self->m_selfLookup && !self->m_selfLookup->isDone()) {
+                for (const auto &node : nodes)
+                    self->m_selfLookup->addCandidate(node.id, node.endpoint);
+            } else {
+                self->m_selfLookup = self->startLookup(Lookup::Kind::FindNode, self->m_id, nullptr, nodes);
+            }
+        }
+        emit self->changed();
+    });
+}
+
+Lookup *DhtNode::startLookup(Lookup::Kind kind, const NodeId &target, Lookup::DoneFn done,
+                             const std::vector<krpc::CompactNode> &extraCandidates)
+{
+    QPointer<DhtNode> self(this);
+    auto *lookup = new Lookup(
+        kind, target, m_config.family, m_id, m_config.allowLocalAddresses,
+        [self](const Endpoint &to, const QByteArray &method, BValue::Dict args, RpcManager::Callback callback) {
+            if (self)
+                self->sendQuery(to, method, std::move(args), std::move(callback));
+        },
+        [self, done = std::move(done)](const Lookup::Result &result) {
+            if (done)
+                done(result);
+            if (self)
+                emit self->changed();
+        },
+        this);
+
+    for (const RoutingNode &node : m_table.closest(target, Lookup::K * 2))
+        lookup->addCandidate(node.id, node.endpoint);
+    for (const krpc::CompactNode &node : extraCandidates)
+        lookup->addCandidate(node.id, node.endpoint);
+
+    m_lookups.append(lookup);
+    lookup->start();
+    return lookup;
+}
+
+void DhtNode::findNode(const NodeId &target, Lookup::DoneFn done)
+{
+    startLookup(Lookup::Kind::FindNode, target, std::move(done));
+}
+
+void DhtNode::getPeers(const NodeId &infohash, Lookup::DoneFn done)
+{
+    startLookup(Lookup::Kind::GetPeers, infohash, std::move(done));
+}
+
+void DhtNode::announce(const NodeId &infohash, quint16 port, bool impliedPort, std::function<void(int)> done)
+{
+    QPointer<DhtNode> self(this);
+    getPeers(infohash, [self, infohash, port, impliedPort, done](const Lookup::Result &result) {
+        if (!self) {
+            if (done)
+                done(0);
+            return;
+        }
+        auto remaining = std::make_shared<int>(0);
+        auto accepted = std::make_shared<int>(0);
+        for (const Lookup::Contact &contact : result.closest) {
+            if (contact.token.isEmpty())
+                continue;
+            BValue::Dict args;
+            args.emplace("info_hash", BValue(infohash.toBytes()));
+            args.emplace("port", BValue(qint64(port)));
+            args.emplace("token", BValue(contact.token));
+            if (impliedPort)
+                args.emplace("implied_port", BValue(1));
+            ++*remaining;
+            self->sendQuery(contact.endpoint, "announce_peer", std::move(args),
+                            [remaining, accepted, done](const RpcReply &reply) {
+                                if (reply.status == RpcReply::Status::Response)
+                                    ++*accepted;
+                                if (--*remaining == 0 && done)
+                                    done(*accepted);
+                            });
+        }
+        if (*remaining == 0 && done)
+            done(0);
+    });
+}
+
+std::vector<krpc::CompactNode> DhtNode::closestNodes(const NodeId &target, int count) const
+{
+    std::vector<krpc::CompactNode> out;
+    for (const RoutingNode &node : m_table.closest(target, count))
+        out.push_back({node.id, node.endpoint});
+    return out;
+}
+
+// --- Maintenance -----------------------------------------------------------
+
+void DhtNode::onMaintenance()
+{
+    const qint64 now = nowMs();
+
+    for (const RoutingNode &node : m_table.nodesNeedingPing(now, 3, PingIntervalMs)) {
+        m_table.markPinged(node.endpoint, now);
+        sendQuery(node.endpoint, "ping", {}, nullptr);
+    }
+
+    if (m_table.size() > 0 && !m_refreshLookup) {
+        if (const auto bucket = m_table.staleBucket(now, BucketRefreshMs)) {
+            m_table.touchBucket(*bucket, now);
+            m_refreshLookup = startLookup(Lookup::Kind::FindNode, m_table.randomIdInBucket(*bucket), nullptr);
+        }
+    }
+
+    m_limiter.prune(now);
+    for (auto it = m_recentVerifications.begin(); it != m_recentVerifications.end();)
+        it = (now - *it >= VerificationWindowMs) ? m_recentVerifications.erase(it) : std::next(it);
+    m_lookups.removeIf([](const QPointer<Lookup> &l) { return l.isNull(); });
+}
+
+// --- Snapshots -------------------------------------------------------------
+
+FamilySnapshot DhtNode::familySnapshot() const
+{
+    FamilySnapshot s;
+    s.enabled = true;
+    s.bound = m_socket && m_socket->state() == QAbstractSocket::BoundState;
+    s.port = port();
+    s.id = m_id;
+    s.externalAddress = m_voter.consensus();
+    s.bep42 = bep42::check(m_id, s.externalAddress);
+    s.nodeCount = m_table.size();
+    s.bucketCount = m_table.bucketCount();
+    return s;
+}
+
+void DhtNode::appendNodeRows(std::vector<NodeRow> &rows, qint64 now) const
+{
+    for (const RoutingNode &node : m_table.allNodes()) {
+        NodeRow row;
+        row.family = m_config.family;
+        row.endpoint = node.endpoint;
+        row.id = node.id;
+        row.hasId = true;
+        row.source = NodeRow::Source::Routing;
+        switch (RoutingTable::stateOf(node, now)) {
+        case RoutingNode::State::Good: row.status = NodeRow::Status::Good; break;
+        case RoutingNode::State::Questionable: row.status = NodeRow::Status::Questionable; break;
+        case RoutingNode::State::Bad: row.status = NodeRow::Status::Bad; break;
+        }
+        row.rttMs = node.rttMs;
+        row.lastSeenAgoMs = now - std::max(node.lastResponse, node.lastQuery);
+        row.bep42 = bep42::check(node.id, node.endpoint.address);
+        row.version = node.version;
+        row.bucket = m_table.bucketIndexFor(node.id);
+        row.sortKey = sortKeyFor(row.family, true, node.id, m_id, node.endpoint);
+        rows.push_back(std::move(row));
+    }
+
+    for (auto it = m_seeds.constBegin(); it != m_seeds.constEnd(); ++it) {
+        if (m_table.contains(it.key()))
+            continue;
+        const Seed &seed = it.value();
+        NodeRow row;
+        row.family = m_config.family;
+        row.endpoint = it.key();
+        row.id = seed.id;
+        row.hasId = seed.hasId;
+        row.source = seed.source == SeedSource::Bootstrap ? NodeRow::Source::Bootstrap : NodeRow::Source::Injected;
+        switch (seed.state) {
+        case Seed::State::Querying: row.status = NodeRow::Status::Querying; break;
+        case Seed::State::Responded: row.status = NodeRow::Status::Responded; break;
+        case Seed::State::NoResponse: row.status = NodeRow::Status::NoResponse; break;
+        }
+        row.rttMs = seed.rttMs;
+        row.lastSeenAgoMs = now - seed.lastAttempt;
+        row.bep42 = seed.hasId ? bep42::check(seed.id, it.key().address) : bep42::Status::Unknown;
+        row.version = seed.version;
+        row.sortKey = sortKeyFor(row.family, seed.hasId, seed.id, m_id, it.key());
+        rows.push_back(std::move(row));
+    }
+}
+
+EngineStats DhtNode::stats() const
+{
+    EngineStats s = m_stats;
+    s.activeLookups = 0;
+    for (const QPointer<Lookup> &lookup : m_lookups) {
+        if (lookup && !lookup->isDone())
+            ++s.activeLookups;
+    }
+    return s;
+}
+
+} // namespace dht

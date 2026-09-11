@@ -1,0 +1,112 @@
+#pragma once
+
+#include "dhtcore/Bep42.h"
+#include "dhtcore/Endpoint.h"
+#include "dhtcore/NodeId.h"
+
+#include <QHostAddress>
+#include <QMetaType>
+#include <QString>
+
+#include <vector>
+
+namespace dht {
+
+// Plain value types describing engine state. Produced on the engine thread
+// and copied to whoever displays them.
+
+struct NodeRow
+{
+    enum class Source { Routing, Injected, Bootstrap };
+    enum class Status { Good, Questionable, Bad, Querying, Responded, NoResponse };
+
+    Family family = Family::IPv4;
+    Endpoint endpoint;
+    NodeId id;
+    bool hasId = false;
+    Source source = Source::Routing;
+    Status status = Status::Querying;
+    int rttMs = -1;
+    qint64 lastSeenAgoMs = -1;
+    bep42::Status bep42 = bep42::Status::Unknown;
+    QByteArray version;
+    int bucket = -1;
+    // Stable ordering key: family, then XOR distance from our own ID, then
+    // endpoint. Lets a view merge successive snapshots without resetting.
+    QByteArray sortKey;
+};
+
+struct FamilySnapshot
+{
+    bool enabled = false;
+    bool bound = false;
+    quint16 port = 0;
+    QString error;
+    NodeId id;
+    QHostAddress externalAddress;
+    bep42::Status bep42 = bep42::Status::Unknown;
+    int nodeCount = 0;
+    int bucketCount = 0;
+};
+
+struct PortMappingSnapshot
+{
+    enum class State { Disabled, Discovering, Mapped, Failed };
+
+    State state = State::Disabled;
+    QString protocol;
+    QHostAddress gateway;
+    QHostAddress externalAddress;
+    quint16 internalPort = 0;
+    quint16 externalPort = 0;
+    quint32 lifetimeSeconds = 0;
+    QString message;
+};
+
+struct EngineStats
+{
+    qint64 packetsIn = 0;
+    qint64 packetsOut = 0;
+    qint64 bytesIn = 0;
+    qint64 bytesOut = 0;
+    qint64 queriesIn = 0;
+    qint64 queriesOut = 0;
+    qint64 responsesIn = 0;
+    qint64 errorsIn = 0;
+    qint64 timeouts = 0;
+    qint64 malformedIn = 0;
+    qint64 rateLimited = 0;
+    int storedInfohashes = 0;
+    int storedPeers = 0;
+    int activeLookups = 0;
+
+    void add(const EngineStats &o)
+    {
+        packetsIn += o.packetsIn;
+        packetsOut += o.packetsOut;
+        bytesIn += o.bytesIn;
+        bytesOut += o.bytesOut;
+        queriesIn += o.queriesIn;
+        queriesOut += o.queriesOut;
+        responsesIn += o.responsesIn;
+        errorsIn += o.errorsIn;
+        timeouts += o.timeouts;
+        malformedIn += o.malformedIn;
+        rateLimited += o.rateLimited;
+        activeLookups += o.activeLookups;
+    }
+};
+
+struct EngineSnapshot
+{
+    bool running = false;
+    FamilySnapshot ipv4;
+    FamilySnapshot ipv6;
+    PortMappingSnapshot portMapping;
+    EngineStats stats;
+    std::vector<NodeRow> nodes;
+};
+
+} // namespace dht
+
+Q_DECLARE_METATYPE(dht::EngineSnapshot)
