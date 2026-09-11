@@ -3,15 +3,16 @@
 #include "dhtcore/DhtEngine.h"
 
 #include <QRegularExpression>
-#include <QSettings>
+// Settings persistence is disabled; see DhtController::DhtController().
+// #include <QSettings>
 #include <QThread>
 
 namespace {
 
-const QString PortKey = QStringLiteral("engine/port");
-const QString Ipv6Key = QStringLiteral("engine/ipv6");
-const QString PortForwardingKey = QStringLiteral("engine/portForwarding");
-const QString Bep42Key = QStringLiteral("engine/bep42");
+// const QString PortKey = QStringLiteral("engine/port");
+// const QString Ipv6Key = QStringLiteral("engine/ipv6");
+// const QString PortForwardingKey = QStringLiteral("engine/portForwarding");
+// const QString Bep42Key = QStringLiteral("engine/bep42");
 
 FamilyStatus toFamilyStatus(const dht::FamilySnapshot &f)
 {
@@ -73,11 +74,16 @@ DhtController::DhtController(QObject *parent)
 {
     qRegisterMetaType<dht::EngineSnapshot>();
 
-    QSettings settings;
-    m_port = std::clamp(settings.value(PortKey, 6881).toInt(), 1, 65535);
-    m_ipv6Enabled = settings.value(Ipv6Key, false).toBool();
-    m_portForwarding = settings.value(PortForwardingKey, false).toBool();
-    m_bep42Enabled = settings.value(Bep42Key, true).toBool();
+    // DHT Inspector is a standalone utility with no preconditions: every
+    // launch starts from the defaults in DhtController.h and nothing is saved
+    // between runs. The QSettings persistence below and in the setters is
+    // commented out rather than deleted, in case it is wanted back.
+    //
+    // QSettings settings;
+    // m_port = std::clamp(settings.value(PortKey, 6881).toInt(), 1, 65535);
+    // m_ipv6Enabled = settings.value(Ipv6Key, false).toBool();
+    // m_portForwarding = settings.value(PortForwardingKey, false).toBool();
+    // m_bep42Enabled = settings.value(Bep42Key, true).toBool();
 
     // Deliberately not persisted: every launch starts from fresh random IDs.
     m_nodeIdV4 = dht::NodeId::random().toHex();
@@ -115,7 +121,7 @@ void DhtController::setPort(int port)
     if (m_running || port == m_port)
         return;
     m_port = port;
-    QSettings().setValue(PortKey, m_port);
+    // QSettings().setValue(PortKey, m_port);
     emit portChanged();
 }
 
@@ -124,7 +130,7 @@ void DhtController::setIpv6Enabled(bool enabled)
     if (m_running || enabled == m_ipv6Enabled)
         return;
     m_ipv6Enabled = enabled;
-    QSettings().setValue(Ipv6Key, m_ipv6Enabled);
+    // QSettings().setValue(Ipv6Key, m_ipv6Enabled);
     emit ipv6EnabledChanged();
 }
 
@@ -133,7 +139,7 @@ void DhtController::setBep42Enabled(bool enabled)
     if (m_running || enabled == m_bep42Enabled)
         return;
     m_bep42Enabled = enabled;
-    QSettings().setValue(Bep42Key, m_bep42Enabled);
+    // QSettings().setValue(Bep42Key, m_bep42Enabled);
     emit bep42EnabledChanged();
 }
 
@@ -177,7 +183,7 @@ void DhtController::setPortForwarding(bool enabled)
     if (enabled == m_portForwarding)
         return;
     m_portForwarding = enabled;
-    QSettings().setValue(PortForwardingKey, m_portForwarding);
+    // QSettings().setValue(PortForwardingKey, m_portForwarding);
     emit portForwardingChanged();
 
     if (m_engine) {

@@ -122,9 +122,10 @@ resolve imports and bundle the right Qt QML modules.
   visual comes from `Theme.qml`, so Windows and Linux render identically.
   (A static build links every Controls style; Basic is a choice for
   consistency, not a static-linking constraint.)
-- Settings (port, IPv6, BEP 42, port forwarding) persist via `QSettings`.
-  Node IDs do not: each launch starts with fresh random ones. Whether the
-  engine is running does not: it is always off at launch.
+- Nothing persists between runs. Every launch starts from default settings,
+  fresh random node IDs and the engine off. QML runs from the units compiled
+  into the executable, and no `.qmlc` cache files are read or written. The
+  `QSettings` persistence code is still in `DhtController.cpp`, commented out.
 - Configuring against the static Qt emits a few `QtFeature.cmake` warnings
   about `Qt6::ScxmlGlobalPrivate`. They come from that Qt install's own package
   metadata, not from this project, and are harmless.
