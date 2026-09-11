@@ -17,6 +17,12 @@ struct EngineConfig
     quint16 port = 6881;
     bool enableIpv6 = false;
     bool portForwarding = false;
+    // Initial node IDs, random when unset. BEP 42 may replace them later.
+    std::optional<NodeId> nodeIdV4;
+    std::optional<NodeId> nodeIdV6;
+    // BEP 42: adopt node IDs derived from the agreed external address, and
+    // tell every node in our replies which address we see it from.
+    bool bep42 = true;
     bool allowLocalAddresses = false;  // for LAN and loopback testing
     QHostAddress bindAddressV4;        // null: any
     QHostAddress bindAddressV6;        // null: any

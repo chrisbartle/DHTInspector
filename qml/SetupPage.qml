@@ -91,9 +91,14 @@ ScrollView {
 
         property string family
         property var status
+        property string nodeId
         property bool familyEnabled: true
 
+        signal nodeIdEdited(string value)
+        signal randomizeRequested()
+
         readonly property bool live: page.running && block.familyEnabled && block.status.bound
+        readonly property string idError: block.familyEnabled ? DhtController.validateNodeId(block.nodeId) : ""
 
         Layout.fillWidth: true
         spacing: Theme.spacingSmall
@@ -103,20 +108,12 @@ ScrollView {
             spacing: Theme.spacing
 
             Label {
+                Layout.fillWidth: true
                 text: block.family
                 color: Theme.text
                 font.pixelSize: Theme.fontSizeNormal
                 font.weight: Font.DemiBold
-                Layout.preferredWidth: page.labelWidth
             }
-
-            Badge {
-                visible: block.live
-                text: Theme.bep42Text(block.status.bep42)
-                tone: Theme.bep42Color(block.status.bep42)
-            }
-
-            Item { Layout.fillWidth: true }
 
             Label {
                 visible: block.live
@@ -132,37 +129,81 @@ ScrollView {
 
             FieldLabel { text: qsTr("Node ID") }
 
-            TextEdit {
+            ThemedTextField {
                 Layout.fillWidth: true
-                readOnly: true
+                Accessible.name: qsTr("%1 node ID").arg(block.family)
+                text: block.nodeId
+                enabled: block.familyEnabled
+                readOnly: page.running
                 selectByMouse: true
-                selectionColor: Theme.accent
-                wrapMode: TextEdit.WrapAnywhere
+                invalid: block.idError !== ""
+                // textChanged rather than textEdited: accessibility tools set the
+                // text without emitting textEdited. Updates coming from the
+                // controller match nodeId and are not echoed back.
+                onTextChanged: if (text !== block.nodeId) block.nodeIdEdited(text)
+            }
+
+            ThemedButton {
+                Accessible.name: qsTr("Randomize %1 node ID").arg(block.family)
+                text: qsTr("Randomize")
+                enabled: !page.running && block.familyEnabled
+                onClicked: block.randomizeRequested()
+            }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            Layout.leftMargin: page.labelWidth + Theme.spacing
+            visible: block.idError !== ""
+            text: block.idError.charAt(0).toUpperCase() + block.idError.slice(1)
+            color: Theme.bad
+            font.pixelSize: Theme.fontSizeSmall
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.spacing
+
+            FieldLabel { text: qsTr("External IP") }
+
+            Label {
+                readonly property bool known: block.live && block.status.externalAddress !== ""
+
+                Layout.fillWidth: true
                 font.pixelSize: Theme.fontSizeSmall
-                font.family: Theme.monoFamily
-                color: block.live ? Theme.text : block.status.error !== "" ? Theme.bad : Theme.textFaint
-                text: block.live ? block.status.nodeId
-                      : !block.familyEnabled ? qsTr("— %1 disabled —").arg(block.family)
-                      : block.status.error !== "" ? block.status.error
-                      : qsTr("— engine stopped —")
+                font.family: known ? Theme.monoFamily : Qt.application.font.family
+                color: known ? Theme.text : block.live || page.running ? Theme.textDim : Theme.textFaint
+                wrapMode: Text.WordWrap
+                text: {
+                    if (!block.familyEnabled)
+                        return qsTr("%1 is off").arg(block.family)
+                    if (!page.running)
+                        return qsTr("Derived once the engine is running")
+                    if (!block.status.bound)
+                        return block.status.error !== "" ? block.status.error : qsTr("Not running")
+                    if (!known)
+                        return qsTr("Not derived yet: waiting for other nodes to agree")
+                    return block.status.externalAddress
+                }
             }
         }
 
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.spacing
-            visible: block.live
 
-            FieldLabel { text: qsTr("External address") }
+            FieldLabel { text: qsTr("BEP 42 compliance") }
 
-            Label {
-                Layout.fillWidth: true
-                font.pixelSize: Theme.fontSizeSmall
-                font.family: Theme.monoFamily
-                color: block.status.externalAddress !== "" ? Theme.text : Theme.textFaint
-                text: block.status.externalAddress !== "" ? block.status.externalAddress
-                                                          : qsTr("not yet agreed by other nodes")
+            Badge {
+                readonly property string compliance: block.live ? block.status.bep42 : "unknown"
+
+                text: Theme.bep42Text(compliance)
+                // With BEP 42 off, non-compliance is expected rather than a fault.
+                tone: !DhtController.bep42Enabled && compliance === "noncompliant" ? Theme.textDim
+                                                                                    : Theme.bep42Color(compliance)
             }
+
+            Item { Layout.fillWidth: true }
         }
     }
 
@@ -194,7 +235,7 @@ ScrollView {
         Panel {
             Layout.fillWidth: true
             title: qsTr("Engine")
-            subtitle: qsTr("Stopping the engine discards everything it holds: routing tables, stored peers, tokens and node IDs.")
+            subtitle: qsTr("Stopping the engine discards everything it holds: routing tables, stored peers and tokens. The node IDs under Node Identity are kept.")
 
             RowLayout {
                 Layout.fillWidth: true
@@ -256,6 +297,7 @@ ScrollView {
                 FieldLabel { text: qsTr("IPv6") }
 
                 ControlledSwitch {
+                    Accessible.name: qsTr("IPv6")
                     enabled: !page.running
                     value: DhtController.ipv6Enabled
                     onRequested: on => DhtController.ipv6Enabled = on
@@ -273,9 +315,29 @@ ScrollView {
                 Layout.fillWidth: true
                 spacing: Theme.spacing
 
+                FieldLabel { text: qsTr("BEP 42") }
+
+                ControlledSwitch {
+                    Accessible.name: qsTr("BEP 42")
+                    enabled: !page.running
+                    value: DhtController.bep42Enabled
+                    onRequested: on => DhtController.bep42Enabled = on
+                }
+
+                Hint {
+                    text: qsTr("Derives this node's ID from its external IP address once other nodes agree on it, which makes it hard to flood the DHT with fake nodes. Replies also tell each node the address we see it from. When off, each node uses exactly the ID set under Node Identity and sends no address.")
+                          + (page.running ? " " + qsTr("Stop the engine to change.") : "")
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.spacing
+
                 FieldLabel { text: qsTr("Port forwarding") }
 
                 ControlledSwitch {
+                    Accessible.name: qsTr("Port forwarding")
                     value: DhtController.portForwarding
                     onRequested: on => DhtController.portForwarding = on
                 }
@@ -306,11 +368,16 @@ ScrollView {
         Panel {
             Layout.fillWidth: true
             title: qsTr("Node Identity")
-            subtitle: qsTr("Each address family runs its own node with its own ID. Once enough nodes agree on our external address, the engine adopts a BEP 42 compliant ID for it and rejoins.")
+            subtitle: DhtController.bep42Enabled
+                      ? qsTr("Each address family runs its own node with its own ID, editable while the engine is stopped. With BEP 42 on, once enough nodes agree on our external IP, a non-compliant ID is replaced by a compliant one and the field shows the new value.")
+                      : qsTr("Each address family runs its own node with its own ID, editable while the engine is stopped. BEP 42 is off, so the engine uses exactly the ID given.")
 
             IdentityBlock {
                 family: qsTr("IPv4")
                 status: DhtController.ipv4
+                nodeId: DhtController.nodeIdV4
+                onNodeIdEdited: value => DhtController.nodeIdV4 = value
+                onRandomizeRequested: DhtController.randomizeNodeId(false)
             }
 
             Rectangle {
@@ -323,6 +390,9 @@ ScrollView {
                 family: qsTr("IPv6")
                 status: DhtController.ipv6
                 familyEnabled: DhtController.ipv6Enabled
+                nodeId: DhtController.nodeIdV6
+                onNodeIdEdited: value => DhtController.nodeIdV6 = value
+                onRandomizeRequested: DhtController.randomizeNodeId(true)
             }
         }
 

@@ -55,6 +55,8 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
     v4.bindAddress = config.bindAddressV4;
     v4.port = config.port;
     v4.allowLocalAddresses = config.allowLocalAddresses;
+    v4.bep42 = config.bep42;
+    v4.nodeId = config.nodeIdV4;
     v4.version = clientVersion();
 
     m_v4 = new DhtNode(v4, &m_storage, this);
@@ -69,6 +71,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
         NodeConfig v6 = v4;
         v6.family = Family::IPv6;
         v6.bindAddress = config.bindAddressV6;
+        v6.nodeId = config.nodeIdV6;
         v6.port = m_v4->port(); // same port number on both families
         m_v6 = new DhtNode(v6, &m_storage, this);
         if (m_v6->bind(&m_v6Error)) {

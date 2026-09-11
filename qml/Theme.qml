@@ -68,13 +68,13 @@ QtObject {
     function bep42Text(state) {
         switch (state) {
         case "compliant":
-            return qsTr("BEP 42 compliant")
+            return qsTr("Compliant")
         case "noncompliant":
-            return qsTr("Not BEP 42 compliant")
+            return qsTr("Not compliant")
         case "exempt":
-            return qsTr("BEP 42 exempt: local address")
+            return qsTr("Exempt: local address")
         default:
-            return qsTr("BEP 42 unknown: external address not established")
+            return qsTr("Unknown until the external IP is derived")
         }
     }
 }

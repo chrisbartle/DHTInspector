@@ -24,6 +24,8 @@ struct NodeConfig
     QHostAddress bindAddress;          // null: any address of the family
     quint16 port = 0;                  // 0: let the OS choose
     bool allowLocalAddresses = false;  // accept private/loopback endpoints from the network
+    bool bep42 = true;                 // derived node IDs and "ip" in replies
+    std::optional<NodeId> nodeId;      // random when unset
     QByteArray version;                // KRPC "v" field
 };
 

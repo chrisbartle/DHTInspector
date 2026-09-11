@@ -32,7 +32,7 @@ DhtNode::DhtNode(const NodeConfig &config, PeerStorage *storage, QObject *parent
     : QObject(parent)
     , m_config(config)
     , m_storage(storage)
-    , m_id(NodeId::random())
+    , m_id(config.nodeId ? *config.nodeId : NodeId::random())
     , m_table(m_id)
     , m_maintenance(this)
 {
@@ -128,7 +128,8 @@ void DhtNode::sendQuery(const Endpoint &to, const QByteArray &method, BValue::Di
 void DhtNode::sendResponse(const krpc::Message &query, const Endpoint &to, BValue::Dict values)
 {
     values.insert_or_assign("id", BValue(m_id.toBytes()));
-    sendDatagram(krpc::encodeResponse(query.transactionId, std::move(values), m_config.version, to), to);
+    const Endpoint requester = m_config.bep42 ? to : Endpoint(); // BEP 42 "ip"
+    sendDatagram(krpc::encodeResponse(query.transactionId, std::move(values), m_config.version, requester), to);
 }
 
 void DhtNode::sendError(const QByteArray &transactionId, const Endpoint &to, int code, const QByteArray &message)
@@ -338,7 +339,9 @@ void DhtNode::maybeVerify(const NodeId &id, const Endpoint &from, qint64 now)
 void DhtNode::adoptExternalAddress(const QHostAddress &address)
 {
     emit changed();
-    if (bep42::isExempt(address) || bep42::isCompliant(m_id, address))
+    // The address is still recorded and reported with BEP 42 off; only the
+    // switch to a derived ID is skipped.
+    if (!m_config.bep42 || bep42::isExempt(address) || bep42::isCompliant(m_id, address))
         return;
 
     // BEP 42: take an ID derived from our external address, then rejoin

@@ -30,13 +30,16 @@ Two jobs, one tool:
   routing table.
 - Answers `ping`, `find_node`, `get_peers` and `announce_peer`, honours BEP 32
   `want`, and stores announced peers for 30 minutes.
-- Includes BEP 42 `ip` in every response, establishes its own external address
-  by majority of what other nodes report, and switches to a BEP 42 compliant ID
-  for it once agreed. Local-network addresses are exempt.
+- Establishes its own external address from what a clear majority of other
+  nodes report. With BEP 42 on (the default) it then switches to a compliant ID
+  for that address and includes `ip` in every response; local-network addresses
+  are exempt. With BEP 42 off, each node keeps its random ID and sends no `ip`.
 - Only adds a node to the routing table after it answers one of our queries,
   keeps at most one node per public IP, and rate-limits queries per source.
-- Stopping the engine destroys it: routing tables, stored peers, tokens and
-  node IDs are all discarded.
+- Node IDs can be given explicitly; otherwise each node picks a random one.
+- Stopping the engine destroys it: routing tables, stored peers and tokens are
+  all discarded. The Setup tab keeps the node IDs that were in use, so a
+  restart reuses them unless edited or randomised.
 - Identifies itself with client version `DG` + two version bytes.
 
 Not yet implemented: BEP 33 (scrape), BEP 44 (arbitrary data), BEP 51
@@ -119,7 +122,8 @@ resolve imports and bundle the right Qt QML modules.
   visual comes from `Theme.qml`, so Windows and Linux render identically.
   (A static build links every Controls style; Basic is a choice for
   consistency, not a static-linking constraint.)
-- Settings (port, IPv6, port forwarding) persist via `QSettings`. Whether the
+- Settings (port, IPv6, BEP 42, port forwarding) persist via `QSettings`.
+  Node IDs do not: each launch starts with fresh random ones. Whether the
   engine is running does not: it is always off at launch.
 - Configuring against the static Qt emits a few `QtFeature.cmake` warnings
   about `Qt6::ScxmlGlobalPrivate`. They come from that Qt install's own package

@@ -2,6 +2,7 @@
 
 #include "dhtcore/DhtEngine.h"
 
+#include <QRegularExpression>
 #include <QSettings>
 #include <QThread>
 
@@ -10,6 +11,7 @@ namespace {
 const QString PortKey = QStringLiteral("engine/port");
 const QString Ipv6Key = QStringLiteral("engine/ipv6");
 const QString PortForwardingKey = QStringLiteral("engine/portForwarding");
+const QString Bep42Key = QStringLiteral("engine/bep42");
 
 FamilyStatus toFamilyStatus(const dht::FamilySnapshot &f)
 {
@@ -75,6 +77,11 @@ DhtController::DhtController(QObject *parent)
     m_port = std::clamp(settings.value(PortKey, 6881).toInt(), 1, 65535);
     m_ipv6Enabled = settings.value(Ipv6Key, false).toBool();
     m_portForwarding = settings.value(PortForwardingKey, false).toBool();
+    m_bep42Enabled = settings.value(Bep42Key, true).toBool();
+
+    // Deliberately not persisted: every launch starts from fresh random IDs.
+    m_nodeIdV4 = dht::NodeId::random().toHex();
+    m_nodeIdV6 = dht::NodeId::random().toHex();
 }
 
 DhtController::~DhtController()
@@ -121,6 +128,50 @@ void DhtController::setIpv6Enabled(bool enabled)
     emit ipv6EnabledChanged();
 }
 
+void DhtController::setBep42Enabled(bool enabled)
+{
+    if (m_running || enabled == m_bep42Enabled)
+        return;
+    m_bep42Enabled = enabled;
+    QSettings().setValue(Bep42Key, m_bep42Enabled);
+    emit bep42EnabledChanged();
+}
+
+void DhtController::setNodeIdV4(const QString &id)
+{
+    if (m_running || id == m_nodeIdV4)
+        return;
+    m_nodeIdV4 = id;
+    emit nodeIdV4Changed();
+}
+
+void DhtController::setNodeIdV6(const QString &id)
+{
+    if (m_running || id == m_nodeIdV6)
+        return;
+    m_nodeIdV6 = id;
+    emit nodeIdV6Changed();
+}
+
+void DhtController::randomizeNodeId(bool ipv6)
+{
+    if (ipv6)
+        setNodeIdV6(dht::NodeId::random().toHex());
+    else
+        setNodeIdV4(dht::NodeId::random().toHex());
+}
+
+QString DhtController::validateNodeId(const QString &text) const
+{
+    const QString id = text.trimmed();
+    static const QRegularExpression hex(QStringLiteral("^[0-9A-Fa-f]*$"));
+    if (!hex.match(id).hasMatch())
+        return tr("only hexadecimal digits 0-9 and a-f are allowed");
+    if (id.size() != dht::NodeId::Size * 2)
+        return tr("needs 40 hexadecimal digits, has %1").arg(id.size());
+    return {};
+}
+
 void DhtController::setPortForwarding(bool enabled)
 {
     if (enabled == m_portForwarding)
@@ -139,6 +190,30 @@ void DhtController::startEngine()
 {
     if (m_engine)
         return;
+
+    // Refuse to start on an ID that is still half-typed.
+    const auto idV4 = dht::NodeId::fromHex(m_nodeIdV4.trimmed());
+    const auto idV6 = dht::NodeId::fromHex(m_nodeIdV6.trimmed());
+    QString idError;
+    if (!idV4)
+        idError = tr("IPv4 node ID: %1").arg(validateNodeId(m_nodeIdV4));
+    else if (m_ipv6Enabled && !idV6)
+        idError = tr("IPv6 node ID: %1").arg(validateNodeId(m_nodeIdV6));
+    if (!idError.isEmpty()) {
+        m_lastError = idError;
+        setNotice(idError, true);
+        emit statusChanged();
+        return;
+    }
+    // Normalise case and whitespace so the fields show exactly what is used.
+    if (idV4->toHex() != m_nodeIdV4) {
+        m_nodeIdV4 = idV4->toHex();
+        emit nodeIdV4Changed();
+    }
+    if (idV6 && idV6->toHex() != m_nodeIdV6) {
+        m_nodeIdV6 = idV6->toHex();
+        emit nodeIdV6Changed();
+    }
 
     const quint64 generation = ++m_generation;
     m_thread = new QThread(this);
@@ -162,6 +237,9 @@ void DhtController::startEngine()
     config.port = quint16(m_port);
     config.enableIpv6 = m_ipv6Enabled;
     config.portForwarding = m_portForwarding;
+    config.bep42 = m_bep42Enabled;
+    config.nodeIdV4 = *idV4;
+    config.nodeIdV6 = idV6;
 
     bool ok = false;
     QString error;
@@ -228,6 +306,17 @@ void DhtController::applySnapshot(const dht::EngineSnapshot &snapshot)
     const int previousPort = m_ipv4.port;
     m_ipv4 = toFamilyStatus(snapshot.ipv4);
     m_ipv6 = toFamilyStatus(snapshot.ipv6);
+
+    // BEP 42 may have replaced an ID; the fields always show the one in use,
+    // and keep it after the engine stops.
+    if (snapshot.ipv4.bound && m_ipv4.nodeId != m_nodeIdV4) {
+        m_nodeIdV4 = m_ipv4.nodeId;
+        emit nodeIdV4Changed();
+    }
+    if (snapshot.ipv6.bound && m_ipv6.nodeId != m_nodeIdV6) {
+        m_nodeIdV6 = m_ipv6.nodeId;
+        emit nodeIdV6Changed();
+    }
     m_portMapping = toPortMappingStatus(snapshot.portMapping);
     m_stats = toStatistics(snapshot.stats);
     m_nodes->update(snapshot.nodes);

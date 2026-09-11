@@ -1,3 +1,4 @@
+#include "dhtcore/Bep42.h"
 #include "dhtcore/DhtEngine.h"
 #include "dhtcore/Krpc.h"
 
@@ -29,15 +30,20 @@ EngineConfig loopbackConfig(bool ipv6 = false)
     return config;
 }
 
-std::unique_ptr<DhtEngine> startEngine(bool ipv6 = false)
+std::unique_ptr<DhtEngine> startEngineWith(const EngineConfig &config)
 {
     auto engine = std::make_unique<DhtEngine>();
     QString error;
-    if (!engine->start(loopbackConfig(ipv6), &error)) {
+    if (!engine->start(config, &error)) {
         qWarning() << "engine failed to start:" << error;
         return nullptr;
     }
     return engine;
+}
+
+std::unique_ptr<DhtEngine> startEngine(bool ipv6 = false)
+{
+    return startEngineWith(loopbackConfig(ipv6));
 }
 
 quint16 portOf(const DhtEngine &engine, Family family = Family::IPv4)
@@ -94,6 +100,9 @@ private slots:
     void bindConflictIsReported();
     void publishesSnapshotsFromWorkerThread();
     void addNodeResolvesHostnames();
+    void bep42Setting_data();
+    void bep42Setting();
+    void usesConfiguredNodeIds();
 };
 
 void TestEngine::swarmConvergesAndSharesPeers()
@@ -362,6 +371,104 @@ void TestEngine::addNodeResolvesHostnames()
     QCOMPARE(snapshot.nodes[0].endpoint, Endpoint(QHostAddress(QHostAddress::LocalHost), portOf(*engine)));
     const QString allNotices = notices.join(QStringLiteral(" | "));
     QVERIFY2(allNotices.contains(QStringLiteral("Contacting localhost")), qPrintable(allNotices));
+}
+
+void TestEngine::bep42Setting_data()
+{
+    QTest::addColumn<bool>("enabled");
+    QTest::newRow("enabled") << true;
+    QTest::newRow("disabled") << false;
+}
+
+void TestEngine::bep42Setting()
+{
+    QFETCH(bool, enabled);
+    const QHostAddress external(QStringLiteral("203.0.113.50"));
+
+    // Start from a configured ID that is certainly not compliant for the
+    // address the fake nodes are about to report.
+    NodeId initial = bep42::generate(external);
+    initial[0] ^= 0x80;
+
+    EngineConfig config = loopbackConfig();
+    config.bep42 = enabled;
+    config.nodeIdV4 = initial;
+    auto engine = startEngineWith(config);
+    QVERIFY(engine);
+    DhtNode *node = engine->node(Family::IPv4);
+    QCOMPARE(node->id(), initial);
+
+    // Three fake nodes on distinct loopback addresses, all answering every
+    // query with "you are 203.0.113.50". A public address is not exempt.
+    std::vector<std::unique_ptr<QUdpSocket>> fakes;
+    for (int i = 2; i <= 4; ++i) {
+        auto fake = std::make_unique<QUdpSocket>();
+        if (!fake->bind(QHostAddress(QStringLiteral("127.0.0.%1").arg(i)), 0))
+            QSKIP("Cannot bind additional loopback addresses on this platform");
+        QUdpSocket *socket = fake.get();
+        const NodeId fakeId = NodeId::random();
+        connect(socket, &QUdpSocket::readyRead, this, [socket, fakeId, external] {
+            while (socket->hasPendingDatagrams()) {
+                const QNetworkDatagram datagram = socket->receiveDatagram();
+                const auto parsed = krpc::parse(datagram.data());
+                if (!parsed.message || parsed.message->type != krpc::MessageType::Query)
+                    continue;
+                BValue::Dict values;
+                values.emplace("id", BValue(fakeId.toBytes()));
+                socket->writeDatagram(datagram.makeReply(
+                    krpc::encodeResponse(parsed.message->transactionId, std::move(values), {}, Endpoint(external, 6881))));
+            }
+        });
+        engine->addNode(socket->localAddress().toString(), socket->localPort());
+        fakes.push_back(std::move(fake));
+    }
+
+    // The address is learned either way.
+    QTRY_COMPARE_WITH_TIMEOUT(node->externalAddress(), external, 5000);
+
+    if (enabled) {
+        QTRY_VERIFY_WITH_TIMEOUT(node->id() != initial, 2000);
+        QVERIFY(bep42::isCompliant(node->id(), external));
+        QCOMPARE(node->familySnapshot().bep42, bep42::Status::Compliant);
+    } else {
+        QTest::qWait(300);
+        QCOMPARE(node->id(), initial);
+        QCOMPARE(node->familySnapshot().bep42, bep42::Status::NonCompliant);
+    }
+
+    // Replies carry "ip" only with BEP 42 on.
+    QUdpSocket client;
+    QVERIFY(client.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const auto reply = exchange(client, portOf(*engine), "p1", "ping", withId(NodeId::random()));
+    QVERIFY(reply);
+    QCOMPARE(reply->reportedAddress.has_value(), enabled);
+}
+
+void TestEngine::usesConfiguredNodeIds()
+{
+    const NodeId v4 = NodeId::random();
+    const NodeId v6 = NodeId::random();
+    EngineConfig config = loopbackConfig(true);
+    config.nodeIdV4 = v4;
+    config.nodeIdV6 = v6;
+    auto engine = startEngineWith(config);
+    QVERIFY(engine);
+    QCOMPARE(engine->node(Family::IPv4)->id(), v4);
+    QCOMPARE(engine->snapshot().ipv4.id, v4);
+    if (engine->node(Family::IPv6))
+        QCOMPARE(engine->node(Family::IPv6)->id(), v6);
+
+    // Other nodes see the configured ID.
+    QUdpSocket client;
+    QVERIFY(client.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const auto reply = exchange(client, portOf(*engine), "p1", "ping", withId(NodeId::random()));
+    QVERIFY(reply);
+    QCOMPARE(*reply->senderId(), v4);
+
+    // Without a configured ID, a start picks a random one.
+    auto other = startEngine();
+    QVERIFY(other);
+    QVERIFY(other->node(Family::IPv4)->id() != v4);
 }
 
 int runTestEngine(int argc, char **argv)
