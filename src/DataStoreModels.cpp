@@ -56,7 +56,6 @@ QVariant StoredItemModel::data(const QModelIndex &index, int role) const
     switch (role) {
     case KindRole: return row.isMutable ? QStringLiteral("mutable") : QStringLiteral("immutable");
     case TargetRole: return row.target.toHex();
-    case TargetShortRole: return row.target.toHex().left(20) + QChar(0x2026);
     case ValueRole: return decodedPreview(row.value);
     case RawValueRole: return previewValue(row.value, 120);
     case ValueSizeRole: return int(row.value.size());
@@ -73,7 +72,6 @@ QHash<int, QByteArray> StoredItemModel::roleNames() const
     return {
         {KindRole, "kind"},
         {TargetRole, "target"},
-        {TargetShortRole, "targetShort"},
         {ValueRole, "value"},
         {RawValueRole, "rawValue"},
         {ValueSizeRole, "valueSize"},
@@ -124,7 +122,6 @@ QVariant StoredInfohashModel::data(const QModelIndex &index, int role) const
 
     switch (role) {
     case InfohashRole: return row.infohash.toHex();
-    case InfohashShortRole: return row.infohash.toHex().left(20) + QChar(0x2026);
     case PeerCountRole: return row.peerCount;
     case LastAnnounceRole: return NodeListModel::formatAge(row.lastAnnounceAgoMs);
     case ExpiresInRole: return formatRemaining(row.expiresInMs);
@@ -136,7 +133,6 @@ QHash<int, QByteArray> StoredInfohashModel::roleNames() const
 {
     return {
         {InfohashRole, "infohash"},
-        {InfohashShortRole, "infohashShort"},
         {PeerCountRole, "peerCount"},
         {LastAnnounceRole, "lastAnnounce"},
         {ExpiresInRole, "expiresIn"},

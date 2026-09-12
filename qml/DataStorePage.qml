@@ -173,7 +173,6 @@ ScrollView {
                         id: infohashRow
 
                         required property string infohash
-                        required property string infohashShort
                         required property int peerCount
                         required property string lastAnnounce
                         required property string expiresIn
@@ -203,7 +202,7 @@ ScrollView {
                             anchors.rightMargin: Theme.spacingSmall
                             spacing: Theme.spacingSmall
 
-                            Cell { text: infohashRow.infohashShort; font.family: Theme.monoFamily }
+                            Cell { text: infohashRow.infohash; font.family: Theme.monoFamily }
                             Cell { cellWidth: 70; text: String(infohashRow.peerCount); color: Theme.textDim }
                             Cell { cellWidth: 110; text: infohashRow.lastAnnounce; color: Theme.textDim }
                             Cell {
@@ -242,7 +241,7 @@ ScrollView {
                 TableHeader {
                     titles: [
                         { title: qsTr("Kind"), width: 90 },
-                        { title: qsTr("Target"), width: 190 },
+                        { title: qsTr("Target"), width: 290 },
                         { title: qsTr("Value"), width: 0 },
                         { title: qsTr("Bytes"), width: 60 },
                         { title: qsTr("Seq"), width: 60 },
@@ -267,7 +266,6 @@ ScrollView {
                         required property int index
                         required property string kind
                         required property string target
-                        required property string targetShort
                         required property string value
                         required property string rawValue
                         required property int valueSize
@@ -299,7 +297,7 @@ ScrollView {
                                 text: itemRow.kind
                                 color: itemRow.kind === "mutable" ? Theme.accent : Theme.textDim
                             }
-                            Cell { cellWidth: 190; text: itemRow.targetShort; font.family: Theme.monoFamily }
+                            Cell { cellWidth: 290; text: itemRow.target; font.family: Theme.monoFamily }
                             Cell { text: itemRow.value; font.family: Theme.monoFamily }
                             Cell { cellWidth: 60; text: String(itemRow.valueSize); color: Theme.textDim }
                             Cell { cellWidth: 60; text: itemRow.sequence; color: Theme.textDim }

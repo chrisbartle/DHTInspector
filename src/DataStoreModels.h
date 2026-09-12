@@ -18,7 +18,6 @@ class StoredInfohashModel : public QAbstractListModel
 public:
     enum Role {
         InfohashRole = Qt::UserRole + 1,
-        InfohashShortRole,
         PeerCountRole,
         LastAnnounceRole,
         ExpiresInRole,
@@ -88,7 +87,6 @@ public:
     enum Role {
         KindRole = Qt::UserRole + 1,
         TargetRole,
-        TargetShortRole,
         ValueRole,
         RawValueRole,
         ValueSizeRole,
