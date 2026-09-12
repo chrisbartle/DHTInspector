@@ -28,10 +28,11 @@ QByteArray sortKeyFor(Family family, bool hasId, const NodeId &id, const NodeId 
 
 } // namespace
 
-DhtNode::DhtNode(const NodeConfig &config, PeerStorage *storage, QObject *parent)
+DhtNode::DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, QObject *parent)
     : QObject(parent)
     , m_config(config)
     , m_storage(storage)
+    , m_items(items)
     , m_id(config.nodeId ? *config.nodeId : NodeId::random())
     , m_table(m_id)
     , m_maintenance(this)
@@ -161,12 +162,12 @@ void DhtNode::handleDatagram(const QByteArray &data, const Endpoint &from)
     }
     const krpc::Message &message = *parsed.message;
     if (message.type == krpc::MessageType::Query)
-        handleQuery(message, from);
+        handleQuery(message, from, data);
     else if (m_rpc)
         m_rpc->handleReply(message, from);
 }
 
-void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from)
+void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from, const QByteArray &datagram)
 {
     const qint64 now = nowMs();
     if (!m_limiter.allow(from.address, now)) {
@@ -246,7 +247,135 @@ void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from)
         return;
     }
 
+    if (method == "get") {
+        handleGet(message, from, now);
+        return;
+    }
+
+    if (method == "put") {
+        handlePut(message, from, datagram, now);
+        return;
+    }
+
     sendError(message.transactionId, from, krpc::MethodUnknown, "Method Unknown");
+}
+
+void DhtNode::handleGet(const krpc::Message &message, const Endpoint &from, qint64 now)
+{
+    const BValue &args = message.body;
+    const auto target = NodeId::fromBytes(args.stringAt("target").value_or(QByteArray()));
+    if (!target) {
+        sendError(message.transactionId, from, krpc::ProtocolError, "missing or invalid target");
+        return;
+    }
+
+    BValue::Dict values = nodesFor(*target, args);
+    values.insert_or_assign("token", BValue(m_tokens.generate(from.address, now)));
+
+    if (const ImmutableItem *item = m_items->immutableItem(*target)) {
+        values.insert_or_assign("v", BValue::preEncoded(item->value));
+    } else if (const MutableItem *item = m_items->mutableItem(*target)) {
+        values.insert_or_assign("k", BValue(item->publicKey));
+        values.insert_or_assign("seq", BValue(item->sequence));
+        // A getter that already holds this sequence number only wants to know
+        // whether a newer one exists.
+        const auto knownSeq = args.integerAt("seq");
+        if (!knownSeq || item->sequence > *knownSeq) {
+            values.insert_or_assign("v", BValue::preEncoded(item->value));
+            values.insert_or_assign("sig", BValue(item->signature));
+        }
+    }
+    sendResponse(message, from, std::move(values));
+}
+
+void DhtNode::handlePut(const krpc::Message &message, const Endpoint &from, const QByteArray &datagram, qint64 now)
+{
+    const BValue &args = message.body;
+
+    const auto token = args.stringAt("token");
+    if (!token || !m_tokens.validate(*token, from.address, now)) {
+        sendError(message.transactionId, from, krpc::ProtocolError, "invalid token");
+        return;
+    }
+
+    // The target is a hash of the value's bytes as they were sent, so use
+    // those rather than a re-encoding.
+    const BValue *value = args.find("v");
+    const QByteArray raw = value ? value->rawSpan(datagram) : QByteArray();
+    if (raw.isEmpty()) {
+        sendError(message.transactionId, from, krpc::ProtocolError, "missing or unreadable v");
+        return;
+    }
+    if (raw.size() > bep44::MaxValueBytes) {
+        sendError(message.transactionId, from, bep44::MessageTooBig, "message (v field) too big");
+        return;
+    }
+
+    const auto key = args.stringAt("k");
+    if (!key) {
+        m_items->putImmutable(bep44::immutableTarget(raw), raw, now);
+        sendResponse(message, from, {});
+        emit changed();
+        return;
+    }
+
+    if (key->size() != bep44::PublicKeyBytes) {
+        sendError(message.transactionId, from, krpc::ProtocolError, "invalid k");
+        return;
+    }
+    const QByteArray salt = args.stringAt("salt").value_or(QByteArray());
+    if (salt.size() > bep44::MaxSaltBytes) {
+        sendError(message.transactionId, from, bep44::SaltTooLong, "salt (salt field) too long");
+        return;
+    }
+    const auto sequence = args.integerAt("seq");
+    const auto signature = args.stringAt("sig");
+    if (!sequence || !signature || signature->size() != bep44::SignatureBytes) {
+        sendError(message.transactionId, from, krpc::ProtocolError, "mutable put needs seq and sig");
+        return;
+    }
+
+    const auto verified = ed25519::verify(*signature, bep44::signingBuffer(salt, *sequence, raw), *key);
+    if (!verified) {
+        // Storing a mutable item without checking its signature would let
+        // anyone overwrite anyone else's data.
+        sendError(message.transactionId, from, krpc::ProtocolError,
+                  "mutable items are not supported by this node yet");
+        return;
+    }
+    if (!*verified) {
+        sendError(message.transactionId, from, bep44::InvalidSignature, "invalid signature");
+        return;
+    }
+
+    MutableItem item;
+    item.target = bep44::mutableTarget(*key, salt);
+    item.publicKey = *key;
+    item.salt = salt;
+    item.signature = *signature;
+    item.value = raw;
+    item.sequence = *sequence;
+
+    switch (m_items->putMutable(item, args.integerAt("cas"), now)) {
+    case ItemStorage::PutResult::CasMismatch:
+        sendError(message.transactionId, from, bep44::CasMismatch, "CAS hash mismatch, re-read value and try again");
+        return;
+    case ItemStorage::PutResult::SequenceTooLow:
+        sendError(message.transactionId, from, bep44::SequenceTooLow, "sequence number less than current");
+        return;
+    case ItemStorage::PutResult::TooBig:
+        sendError(message.transactionId, from, bep44::MessageTooBig, "message (v field) too big");
+        return;
+    case ItemStorage::PutResult::SaltTooLong:
+        sendError(message.transactionId, from, bep44::SaltTooLong, "salt (salt field) too long");
+        return;
+    case ItemStorage::PutResult::Stored:
+    case ItemStorage::PutResult::Refreshed:
+        break;
+    }
+
+    sendResponse(message, from, {});
+    emit changed();
 }
 
 BValue::Dict DhtNode::nodesFor(const NodeId &target, const BValue &arguments) const

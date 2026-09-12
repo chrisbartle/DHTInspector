@@ -107,6 +107,59 @@ struct EngineSnapshot
     std::vector<NodeRow> nodes;
 };
 
+// --- data store -------------------------------------------------------------
+
+struct StoredPeerRow
+{
+    Endpoint endpoint;
+    qint64 ageMs = 0;        // since this peer last announced
+    qint64 expiresInMs = 0;  // until it is dropped
+};
+
+struct StoredInfohashRow
+{
+    NodeId infohash;
+    int peerCount = 0;
+    qint64 lastAnnounceAgoMs = 0;
+    qint64 expiresInMs = 0;  // when the longest-lived peer expires
+    std::vector<StoredPeerRow> peers;
+};
+
+// A BEP 44 item: immutable (a value keyed by its own hash) or mutable (signed
+// by a public key, with a sequence number).
+struct StoredItemRow
+{
+    bool isMutable = false;
+    NodeId target;
+    QByteArray value;      // bencoded, as it arrived
+    QByteArray publicKey;  // mutable only
+    QByteArray salt;       // mutable only
+    qint64 sequence = 0;   // mutable only
+    qint64 ageMs = 0;
+    qint64 expiresInMs = 0;
+};
+
+// Everything this node holds for other people. Built on demand: it can be far
+// larger than the routine engine snapshot.
+struct StorageSnapshot
+{
+    bool running = false;
+    qint64 ttlMs = 0;
+    int maxInfohashes = 0;
+    int maxPeersPerInfohash = 0;
+    int infohashCount = 0;
+    int peerCount = 0;
+    bool truncated = false;  // more infohashes than the listing limit
+    std::vector<StoredInfohashRow> infohashes;  // most recent announce first
+
+    qint64 itemTtlMs = 0;
+    int maxItems = 0;
+    int immutableCount = 0;
+    int mutableCount = 0;
+    std::vector<StoredItemRow> items;  // most recently stored first
+};
+
 } // namespace dht
 
 Q_DECLARE_METATYPE(dht::EngineSnapshot)
+Q_DECLARE_METATYPE(dht::StorageSnapshot)

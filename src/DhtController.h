@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DataStoreModels.h"
 #include "NodeListModel.h"
 #include "StatusTypes.h"
 
@@ -41,6 +42,12 @@ class DhtController : public QObject
     Q_PROPERTY(EngineStatistics stats READ stats NOTIFY snapshotChanged)
     Q_PROPERTY(NodeListModel *nodes READ nodes CONSTANT)
 
+    Q_PROPERTY(StoredInfohashModel *storedInfohashes READ storedInfohashes CONSTANT)
+    Q_PROPERTY(StoredPeerModel *storedPeers READ storedPeers CONSTANT)
+    Q_PROPERTY(StoredItemModel *storedItems READ storedItems CONSTANT)
+    Q_PROPERTY(DataStoreSummary dataStore READ dataStore NOTIFY dataStoreChanged)
+    Q_PROPERTY(QString selectedInfohash READ selectedInfohash NOTIFY dataStoreChanged)
+
     Q_PROPERTY(QString notice READ notice NOTIFY noticeChanged)
     Q_PROPERTY(bool noticeIsError READ noticeIsError NOTIFY noticeChanged)
 
@@ -74,6 +81,11 @@ public:
     PortMappingStatus portMapping() const { return m_portMapping; }
     EngineStatistics stats() const { return m_stats; }
     NodeListModel *nodes() const { return m_nodes; }
+    StoredInfohashModel *storedInfohashes() const { return m_storedInfohashes; }
+    StoredPeerModel *storedPeers() const { return m_storedPeers; }
+    StoredItemModel *storedItems() const { return m_storedItems; }
+    DataStoreSummary dataStore() const { return m_dataStore; }
+    QString selectedInfohash() const { return m_selectedInfohash; }
 
     QString notice() const { return m_notice; }
     bool noticeIsError() const { return m_noticeIsError; }
@@ -88,6 +100,10 @@ public:
     Q_INVOKABLE QString validateNodeId(const QString &text) const;
     Q_INVOKABLE void randomizeNodeId(bool ipv6);
 
+    // The Data Store page asks for this while it is visible.
+    Q_INVOKABLE void refreshDataStore();
+    Q_INVOKABLE void selectInfohash(const QString &infohash);
+
 signals:
     void runningChanged();
     void statusChanged();
@@ -98,6 +114,7 @@ signals:
     void nodeIdV4Changed();
     void nodeIdV6Changed();
     void snapshotChanged();
+    void dataStoreChanged();
     void noticeChanged();
 
 private:
@@ -105,6 +122,8 @@ private:
     void stopEngine();
     void destroyEngine();
     void applySnapshot(const dht::EngineSnapshot &snapshot);
+    void applyStorageSnapshot(const dht::StorageSnapshot &snapshot);
+    void clearDataStore();
     void resetStatus();
     void setNotice(const QString &text, bool isError);
 
@@ -126,6 +145,11 @@ private:
     PortMappingStatus m_portMapping;
     EngineStatistics m_stats;
     NodeListModel *m_nodes;
+    StoredInfohashModel *m_storedInfohashes;
+    StoredPeerModel *m_storedPeers;
+    StoredItemModel *m_storedItems;
+    DataStoreSummary m_dataStore;
+    QString m_selectedInfohash;
 
     QString m_notice;
     bool m_noticeIsError = false;

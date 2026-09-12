@@ -38,7 +38,7 @@ class DhtNode : public QObject
 public:
     enum class SeedSource { Injected, Bootstrap };
 
-    DhtNode(const NodeConfig &config, PeerStorage *storage, QObject *parent = nullptr);
+    DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, QObject *parent = nullptr);
     ~DhtNode() override;
 
     bool bind(QString *error);
@@ -90,7 +90,9 @@ private:
     void onReadyRead();
     void onMaintenance();
     void handleDatagram(const QByteArray &data, const Endpoint &from);
-    void handleQuery(const krpc::Message &message, const Endpoint &from);
+    void handleQuery(const krpc::Message &message, const Endpoint &from, const QByteArray &datagram);
+    void handlePut(const krpc::Message &message, const Endpoint &from, const QByteArray &datagram, qint64 now);
+    void handleGet(const krpc::Message &message, const Endpoint &from, qint64 now);
 
     void sendDatagram(const QByteArray &data, const Endpoint &to);
     void sendQuery(const Endpoint &to, const QByteArray &method, BValue::Dict arguments,
@@ -109,6 +111,7 @@ private:
 
     NodeConfig m_config;
     PeerStorage *m_storage;
+    ItemStorage *m_items;
     QUdpSocket *m_socket = nullptr;
     RpcManager *m_rpc = nullptr;
     NodeId m_id;

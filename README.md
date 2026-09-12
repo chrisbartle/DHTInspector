@@ -18,6 +18,7 @@ Two jobs, one tool:
 | DHT engine (`dhtcore`) | Working: BEP 5, BEP 32, BEP 42, BEP 43 handling, peer storage |
 | Port forwarding | Working against test gateways: PCP with NAT-PMP fallback |
 | Setup tab | Working |
+| Data Store tab | Working: announced peers with addresses and expiry |
 | Global Health tab | Layout only |
 | Probe Node tab | Layout only |
 
@@ -42,12 +43,16 @@ Two jobs, one tool:
   restart reuses them unless edited or randomised.
 - Identifies itself with client version `DI` + two version bytes.
 
-Not yet implemented: BEP 33 (scrape), BEP 44 (arbitrary data), BEP 51
-(infohash sampling), UPnP port mapping.
+- BEP 44: stores immutable and mutable items, with Ed25519 signature checks,
+  sequence numbers and compare-and-swap. Items expire after two hours.
+
+Not yet implemented: BEP 33 (scrape), BEP 51 (infohash sampling), UPnP port
+mapping.
 
 ## Layout
 
 ```
+third_party/         vendored Monocypher (Ed25519 for BEP 44), see its README
 dhtcore/             protocol engine, static library, Qt Core + Network only
   Bencode            observing decoder: reports non-canonical input as warnings
   Krpc               message codec, compact node/peer encoding

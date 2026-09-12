@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dhtcore/Bep44.h"
 #include "dhtcore/Endpoint.h"
 #include "dhtcore/NodeId.h"
 
@@ -7,6 +8,7 @@
 #include <QHash>
 #include <QHostAddress>
 
+#include <optional>
 #include <vector>
 
 namespace dht {
@@ -76,6 +78,54 @@ private:
 
     QHash<NodeId, Entry> m_entries;
     int m_peerCount = 0;
+};
+
+struct ImmutableItem
+{
+    NodeId target;
+    QByteArray value;  // bencoded, exactly as it arrived
+    qint64 storedAt = 0;
+};
+
+struct MutableItem
+{
+    NodeId target;
+    QByteArray publicKey;
+    QByteArray salt;
+    QByteArray signature;
+    QByteArray value;  // bencoded, exactly as it arrived
+    qint64 sequence = 0;
+    qint64 storedAt = 0;
+};
+
+// BEP 44 items held for other people. Signatures are checked by the caller
+// before anything reaches this class.
+class ItemStorage
+{
+public:
+    static constexpr int MaxItems = 1000;
+
+    enum class PutResult { Stored, Refreshed, SequenceTooLow, CasMismatch, TooBig, SaltTooLong };
+
+    PutResult putImmutable(const NodeId &target, const QByteArray &bencodedValue, qint64 now);
+    PutResult putMutable(const MutableItem &item, std::optional<qint64> cas, qint64 now);
+
+    const ImmutableItem *immutableItem(const NodeId &target) const;
+    const MutableItem *mutableItem(const NodeId &target) const;
+
+    void expire(qint64 now);
+    void clear();
+
+    int immutableCount() const { return int(m_immutable.size()); }
+    int mutableCount() const { return int(m_mutable.size()); }
+    std::vector<ImmutableItem> immutableSnapshot() const;
+    std::vector<MutableItem> mutableSnapshot() const;
+
+private:
+    void makeRoom();
+
+    QHash<NodeId, ImmutableItem> m_immutable;
+    QHash<NodeId, MutableItem> m_mutable;
 };
 
 // Establishes our external address from the "ip" field other nodes put in

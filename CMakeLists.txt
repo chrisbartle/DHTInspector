@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.21)
 project(DHTInspector
     VERSION 0.1.0
     DESCRIPTION "Diagnostic tool for the mainline BitTorrent DHT"
-    LANGUAGES CXX
+    LANGUAGES CXX C  # C for the vendored Monocypher
 )
 
 set(CMAKE_CXX_STANDARD 20)
@@ -26,6 +26,7 @@ endif()
 
 option(DHTINSPECTOR_BUILD_TESTS "Build the dhtcore test suite" ON)
 
+add_subdirectory(third_party/monocypher)
 add_subdirectory(dhtcore)
 
 if(DHTINSPECTOR_BUILD_TESTS)
@@ -45,6 +46,7 @@ qt_add_qml_module(DHTInspector
     VERSION 1.0
     SOURCES
         src/DhtController.h src/DhtController.cpp
+        src/DataStoreModels.h src/DataStoreModels.cpp
         src/NodeListModel.h src/NodeListModel.cpp
         src/StatusTypes.h
     QML_FILES
@@ -58,6 +60,7 @@ qt_add_qml_module(DHTInspector
         qml/ThemedTextField.qml
         qml/EmptyState.qml
         qml/SetupPage.qml
+        qml/DataStorePage.qml
         qml/GlobalHealthPage.qml
         qml/ProbeNodePage.qml
 )

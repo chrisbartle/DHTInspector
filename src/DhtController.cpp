@@ -71,8 +71,12 @@ EngineStatistics toStatistics(const dht::EngineStats &s)
 DhtController::DhtController(QObject *parent)
     : QObject(parent)
     , m_nodes(new NodeListModel(this))
+    , m_storedInfohashes(new StoredInfohashModel(this))
+    , m_storedPeers(new StoredPeerModel(this))
+    , m_storedItems(new StoredItemModel(this))
 {
     qRegisterMetaType<dht::EngineSnapshot>();
+    qRegisterMetaType<dht::StorageSnapshot>();
 
     // DHT Inspector is a standalone utility with no preconditions: every
     // launch starts from the defaults in DhtController.h and nothing is saved
@@ -237,6 +241,11 @@ void DhtController::startEngine()
         if (generation == m_generation)
             setNotice(text, isError);
     });
+    connect(m_engine, &dht::DhtEngine::storageSnapshotReady, this,
+            [this, generation](const dht::StorageSnapshot &snapshot) {
+                if (generation == m_generation && m_running)
+                    applyStorageSnapshot(snapshot);
+            });
     m_thread->start();
 
     dht::EngineConfig config;
@@ -304,6 +313,7 @@ void DhtController::resetStatus()
     m_portMapping = PortMappingStatus{};
     m_stats = EngineStatistics{};
     m_nodes->clear();
+    clearDataStore();
     emit snapshotChanged();
 }
 
@@ -374,6 +384,69 @@ void DhtController::autoBootstrap()
     if (!m_engine)
         return;
     QMetaObject::invokeMethod(m_engine, [engine = m_engine] { engine->bootstrap(); }, Qt::QueuedConnection);
+}
+
+void DhtController::refreshDataStore()
+{
+    if (!m_engine) {
+        clearDataStore();
+        return;
+    }
+    QMetaObject::invokeMethod(m_engine, [engine = m_engine] { engine->requestStorageSnapshot(); },
+                              Qt::QueuedConnection);
+}
+
+void DhtController::selectInfohash(const QString &infohash)
+{
+    if (infohash == m_selectedInfohash)
+        return;
+    m_selectedInfohash = infohash;
+    m_storedPeers->clear();
+    emit dataStoreChanged();
+    refreshDataStore();
+}
+
+void DhtController::applyStorageSnapshot(const dht::StorageSnapshot &snapshot)
+{
+    m_dataStore.infohashCount = snapshot.infohashCount;
+    m_dataStore.peerCount = snapshot.peerCount;
+    m_dataStore.listed = int(snapshot.infohashes.size());
+    m_dataStore.maxInfohashes = snapshot.maxInfohashes;
+    m_dataStore.maxPeersPerInfohash = snapshot.maxPeersPerInfohash;
+    m_dataStore.ttlMinutes = int(snapshot.ttlMs / 60000);
+    m_dataStore.truncated = snapshot.truncated;
+    m_dataStore.immutableCount = snapshot.immutableCount;
+    m_dataStore.mutableCount = snapshot.mutableCount;
+    m_dataStore.maxItems = snapshot.maxItems;
+    m_dataStore.itemTtlMinutes = int(snapshot.itemTtlMs / 60000);
+
+    std::vector<dht::StoredPeerRow> peers;
+    bool selectionFound = false;
+    for (const dht::StoredInfohashRow &row : snapshot.infohashes) {
+        if (row.infohash.toHex() == m_selectedInfohash) {
+            peers = row.peers;
+            selectionFound = true;
+            break;
+        }
+    }
+    // An infohash whose peers have all expired is gone from the listing.
+    if (!selectionFound)
+        m_selectedInfohash.clear();
+
+    m_storedInfohashes->update(snapshot.infohashes);
+    m_storedPeers->update(std::move(peers));
+    m_storedItems->update(snapshot.items);
+    emit dataStoreChanged();
+}
+
+void DhtController::clearDataStore()
+{
+    m_storedInfohashes->clear();
+    m_storedPeers->clear();
+    m_storedItems->clear();
+    m_selectedInfohash.clear();
+    m_dataStore = DataStoreSummary{};
+    emit dataStoreChanged();
 }
 
 QStringList DhtController::bootstrapRouters() const

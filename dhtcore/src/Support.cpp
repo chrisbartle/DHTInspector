@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <limits>
 
 namespace dht {
 
@@ -161,6 +162,135 @@ std::vector<StoredInfohash> PeerStorage::snapshot() const
             item.peers.push_back({p.key(), p.value()});
         out.push_back(std::move(item));
     }
+    return out;
+}
+
+// --- ItemStorage -----------------------------------------------------------
+
+void ItemStorage::makeRoom()
+{
+    if (immutableCount() + mutableCount() < MaxItems)
+        return;
+    // Drop whichever stored item is oldest.
+    qint64 oldest = std::numeric_limits<qint64>::max();
+    NodeId victim;
+    bool victimIsMutable = false;
+    for (auto it = m_immutable.constBegin(); it != m_immutable.constEnd(); ++it) {
+        if (it->storedAt < oldest) {
+            oldest = it->storedAt;
+            victim = it.key();
+            victimIsMutable = false;
+        }
+    }
+    for (auto it = m_mutable.constBegin(); it != m_mutable.constEnd(); ++it) {
+        if (it->storedAt < oldest) {
+            oldest = it->storedAt;
+            victim = it.key();
+            victimIsMutable = true;
+        }
+    }
+    if (victimIsMutable)
+        m_mutable.remove(victim);
+    else
+        m_immutable.remove(victim);
+}
+
+ItemStorage::PutResult ItemStorage::putImmutable(const NodeId &target, const QByteArray &bencodedValue, qint64 now)
+{
+    if (bencodedValue.size() > bep44::MaxValueBytes)
+        return PutResult::TooBig;
+
+    const auto it = m_immutable.find(target);
+    if (it != m_immutable.end()) {
+        it->storedAt = now;
+        return PutResult::Refreshed;
+    }
+
+    makeRoom();
+    ImmutableItem item;
+    item.target = target;
+    item.value = bencodedValue;
+    item.storedAt = now;
+    m_immutable.insert(target, item);
+    return PutResult::Stored;
+}
+
+ItemStorage::PutResult ItemStorage::putMutable(const MutableItem &item, std::optional<qint64> cas, qint64 now)
+{
+    if (item.value.size() > bep44::MaxValueBytes)
+        return PutResult::TooBig;
+    if (item.salt.size() > bep44::MaxSaltBytes)
+        return PutResult::SaltTooLong;
+
+    const auto it = m_mutable.find(item.target);
+    if (it != m_mutable.end()) {
+        // compare-and-swap: refuse if someone else has written since the
+        // putter last read the item
+        if (cas && it->sequence != *cas)
+            return PutResult::CasMismatch;
+        if (item.sequence < it->sequence)
+            return PutResult::SequenceTooLow;
+        if (item.sequence == it->sequence) {
+            it->storedAt = now;
+            return PutResult::Refreshed;
+        }
+        MutableItem stored = item;
+        stored.storedAt = now;
+        *it = stored;
+        return PutResult::Stored;
+    }
+
+    if (cas)
+        return PutResult::CasMismatch;
+
+    makeRoom();
+    MutableItem stored = item;
+    stored.storedAt = now;
+    m_mutable.insert(item.target, stored);
+    return PutResult::Stored;
+}
+
+const ImmutableItem *ItemStorage::immutableItem(const NodeId &target) const
+{
+    const auto it = m_immutable.constFind(target);
+    return it == m_immutable.constEnd() ? nullptr : &it.value();
+}
+
+const MutableItem *ItemStorage::mutableItem(const NodeId &target) const
+{
+    const auto it = m_mutable.constFind(target);
+    return it == m_mutable.constEnd() ? nullptr : &it.value();
+}
+
+void ItemStorage::expire(qint64 now)
+{
+    for (auto it = m_immutable.begin(); it != m_immutable.end();)
+        it = (now - it->storedAt >= bep44::ItemTtlMs) ? m_immutable.erase(it) : std::next(it);
+    for (auto it = m_mutable.begin(); it != m_mutable.end();)
+        it = (now - it->storedAt >= bep44::ItemTtlMs) ? m_mutable.erase(it) : std::next(it);
+}
+
+void ItemStorage::clear()
+{
+    m_immutable.clear();
+    m_mutable.clear();
+}
+
+std::vector<ImmutableItem> ItemStorage::immutableSnapshot() const
+{
+    std::vector<ImmutableItem> out;
+    out.reserve(m_immutable.size());
+    for (auto it = m_immutable.constBegin(); it != m_immutable.constEnd(); ++it)
+        out.push_back(it.value());
+    return out;
+}
+
+std::vector<MutableItem> ItemStorage::mutableSnapshot() const
+{
+    std::vector<MutableItem> out;
+    out.reserve(m_mutable.size());
+    for (auto it = m_mutable.constBegin(); it != m_mutable.constEnd(); ++it)
+        out.push_back(it.value());
     return out;
 }
 

@@ -1,4 +1,5 @@
 #include "dhtcore/Bep42.h"
+#include "dhtcore/Bep44.h"
 #include "dhtcore/DhtEngine.h"
 #include "dhtcore/Krpc.h"
 
@@ -103,6 +104,9 @@ private slots:
     void bep42Setting_data();
     void bep42Setting();
     void usesConfiguredNodeIds();
+    void storageSnapshotListsAnnouncedPeers();
+    void bep44PutAndGet();
+    void bep44MutableItems();
 };
 
 void TestEngine::swarmConvergesAndSharesPeers()
@@ -469,6 +473,236 @@ void TestEngine::usesConfiguredNodeIds()
     auto other = startEngine();
     QVERIFY(other);
     QVERIFY(other->node(Family::IPv4)->id() != v4);
+}
+
+void TestEngine::storageSnapshotListsAnnouncedPeers()
+{
+    auto engine = startEngine();
+    QVERIFY(engine);
+    const quint16 port = portOf(*engine);
+
+    QUdpSocket client;
+    QVERIFY(client.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const NodeId clientId = NodeId::random();
+    const NodeId infohash = NodeId::random();
+
+    QCOMPARE(engine->storageSnapshot().infohashCount, 0);
+    QCOMPARE(engine->storageSnapshot().ttlMs, PeerStorage::PeerTtlMs);
+
+    BValue::Dict getPeersArgs;
+    getPeersArgs.emplace("info_hash", BValue(infohash.toBytes()));
+    auto reply = exchange(client, port, "g1", "get_peers", withId(clientId, std::move(getPeersArgs)));
+    QVERIFY(reply);
+    const QByteArray token = reply->body.stringAt("token").value_or(QByteArray());
+    QVERIFY(!token.isEmpty());
+
+    BValue::Dict announceArgs;
+    announceArgs.emplace("info_hash", BValue(infohash.toBytes()));
+    announceArgs.emplace("port", BValue(5555));
+    announceArgs.emplace("token", BValue(token));
+    reply = exchange(client, port, "a1", "announce_peer", withId(clientId, std::move(announceArgs)));
+    QVERIFY(reply);
+    QCOMPARE(reply->type, krpc::MessageType::Response);
+
+    const StorageSnapshot stored = engine->storageSnapshot();
+    QVERIFY(stored.running);
+    QCOMPARE(stored.infohashCount, 1);
+    QCOMPARE(stored.peerCount, 1);
+    QVERIFY(!stored.truncated);
+    QCOMPARE(int(stored.infohashes.size()), 1);
+
+    const StoredInfohashRow &row = stored.infohashes[0];
+    QCOMPARE(row.infohash, infohash);
+    QCOMPARE(row.peerCount, 1);
+    QVERIFY(row.lastAnnounceAgoMs >= 0 && row.lastAnnounceAgoMs < 5000);
+    QCOMPARE(int(row.peers.size()), 1);
+
+    const StoredPeerRow &peer = row.peers[0];
+    QCOMPARE(peer.endpoint, Endpoint(QHostAddress(QHostAddress::LocalHost), 5555));
+    QVERIFY(peer.ageMs >= 0 && peer.ageMs < 5000);
+    QVERIFY(peer.expiresInMs > PeerStorage::PeerTtlMs - 5000 && peer.expiresInMs <= PeerStorage::PeerTtlMs);
+    QCOMPARE(row.expiresInMs, peer.expiresInMs);
+
+    // Stopping the engine empties the store.
+    engine->shutdown();
+    QCOMPARE(engine->storageSnapshot().infohashCount, 0);
+    QVERIFY(!engine->storageSnapshot().running);
+}
+
+void TestEngine::bep44PutAndGet()
+{
+    auto engine = startEngine();
+    QVERIFY(engine);
+    const quint16 port = portOf(*engine);
+
+    QUdpSocket client;
+    QVERIFY(client.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const NodeId clientId = NodeId::random();
+
+    // get on an unknown target still hands out a token and no value
+    BValue::Dict firstGet;
+    firstGet.emplace("target", BValue(NodeId::random().toBytes()));
+    auto reply = exchange(client, port, "t1", "get", withId(clientId, std::move(firstGet)));
+    QVERIFY(reply);
+    QCOMPARE(reply->type, krpc::MessageType::Response);
+    const QByteArray token = reply->body.stringAt("token").value_or(QByteArray());
+    QVERIFY(!token.isEmpty());
+    QVERIFY(!reply->body.find("v"));
+
+    // put an immutable item, under the target from BEP 44's own example
+    BValue::Dict put;
+    put.emplace("token", BValue(token));
+    put.emplace("v", BValue(QByteArray("Hello World!")));
+    reply = exchange(client, port, "p1", "put", withId(clientId, std::move(put)));
+    QVERIFY(reply);
+    QCOMPARE(reply->type, krpc::MessageType::Response);
+    QCOMPARE(engine->items().immutableCount(), 1);
+
+    const NodeId target = bep44::immutableTarget("12:Hello World!");
+    QCOMPARE(target.toHex(), QStringLiteral("e5f96f6f38320f0f33959cb4d3d656452117aadb"));
+    QVERIFY(engine->items().immutableItem(target));
+
+    // and it reaches the Data Store view
+    const StorageSnapshot stored = engine->storageSnapshot();
+    QCOMPARE(stored.immutableCount, 1);
+    QCOMPARE(stored.mutableCount, 0);
+    QCOMPARE(int(stored.items.size()), 1);
+    QCOMPARE(stored.items[0].target, target);
+    QCOMPARE(stored.items[0].value, QByteArray("12:Hello World!"));
+    QVERIFY(!stored.items[0].isMutable);
+    QVERIFY(stored.items[0].expiresInMs > bep44::ItemTtlMs - 5000);
+    QCOMPARE(stored.itemTtlMs, bep44::ItemTtlMs);
+
+    // and read it back
+    BValue::Dict get;
+    get.emplace("target", BValue(target.toBytes()));
+    reply = exchange(client, port, "t2", "get", withId(clientId, std::move(get)));
+    QVERIFY(reply);
+    const BValue *value = reply->body.find("v");
+    QVERIFY(value);
+    QVERIFY(value->isString());
+    QCOMPARE(value->toString(), QByteArray("Hello World!"));
+
+    // a bad token is refused
+    BValue::Dict badToken;
+    badToken.emplace("token", BValue("nope"));
+    badToken.emplace("v", BValue(QByteArray("x")));
+    reply = exchange(client, port, "p2", "put", withId(clientId, std::move(badToken)));
+    QVERIFY(reply);
+    QCOMPARE(reply->errorCode, qint64(krpc::ProtocolError));
+
+    // so is an oversized value, with BEP 44's own error code
+    BValue::Dict tooBig;
+    tooBig.emplace("token", BValue(token));
+    tooBig.emplace("v", BValue(QByteArray(bep44::MaxValueBytes + 10, 'x')));
+    reply = exchange(client, port, "p3", "put", withId(clientId, std::move(tooBig)));
+    QVERIFY(reply);
+    QCOMPARE(reply->errorCode, qint64(bep44::MessageTooBig));
+
+    // an unsigned mutable put is refused
+    BValue::Dict forged;
+    forged.emplace("token", BValue(token));
+    forged.emplace("v", BValue(QByteArray("Hello World!")));
+    forged.emplace("k", BValue(QByteArray(bep44::PublicKeyBytes, 'k')));
+    forged.emplace("seq", BValue(qint64(1)));
+    forged.emplace("sig", BValue(QByteArray(bep44::SignatureBytes, 's')));
+    reply = exchange(client, port, "p4", "put", withId(clientId, std::move(forged)));
+    QVERIFY(reply);
+    QCOMPARE(reply->errorCode, qint64(bep44::InvalidSignature));
+    QCOMPARE(engine->items().mutableCount(), 0);
+}
+
+void TestEngine::bep44MutableItems()
+{
+    auto engine = startEngine();
+    QVERIFY(engine);
+    const quint16 port = portOf(*engine);
+
+    QUdpSocket client;
+    QVERIFY(client.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const NodeId clientId = NodeId::random();
+    const ed25519::KeyPair keys = ed25519::randomKeyPair();
+    const QByteArray salt = "foobar";
+
+    const auto token = [&] {
+        BValue::Dict args;
+        args.emplace("target", BValue(NodeId::random().toBytes()));
+        const auto reply = exchange(client, port, "t0", "get", withId(clientId, std::move(args)));
+        return reply ? reply->body.stringAt("token").value_or(QByteArray()) : QByteArray();
+    }();
+    QVERIFY(!token.isEmpty());
+
+    const auto put = [&](const QByteArray &tid, const QByteArray &bencodedValue, qint64 sequence,
+                         std::optional<qint64> cas, bool corruptSignature) {
+        const QByteArray signature =
+            ed25519::sign(bep44::signingBuffer(salt, sequence, bencodedValue), keys.secretKey);
+        BValue::Dict args;
+        args.emplace("token", BValue(token));
+        args.emplace("v", BValue(bencodedValue.mid(bencodedValue.indexOf(':') + 1)));
+        args.emplace("k", BValue(keys.publicKey));
+        args.emplace("salt", BValue(salt));
+        args.emplace("seq", BValue(sequence));
+        args.emplace("sig", BValue(corruptSignature ? QByteArray(bep44::SignatureBytes, 'x') : signature));
+        if (cas)
+            args.emplace("cas", BValue(*cas));
+        return exchange(client, port, tid, "put", withId(clientId, std::move(args)));
+    };
+
+    // store, then read back through the target BEP 44 derives from key + salt
+    auto reply = put("m1", "5:first", 1, std::nullopt, false);
+    QVERIFY(reply);
+    QCOMPARE(reply->type, krpc::MessageType::Response);
+    QCOMPARE(engine->items().mutableCount(), 1);
+
+    const NodeId target = bep44::mutableTarget(keys.publicKey, salt);
+    const MutableItem *stored = engine->items().mutableItem(target);
+    QVERIFY(stored);
+    QCOMPARE(stored->sequence, qint64(1));
+    QCOMPARE(stored->value, QByteArray("5:first"));
+
+    BValue::Dict get;
+    get.emplace("target", BValue(target.toBytes()));
+    reply = exchange(client, port, "g1", "get", withId(clientId, std::move(get)));
+    QVERIFY(reply);
+    QCOMPARE(reply->body.stringAt("k").value_or(QByteArray()), keys.publicKey);
+    QCOMPARE(reply->body.integerAt("seq").value_or(0), qint64(1));
+    QCOMPARE(reply->body.stringAt("sig").value_or(QByteArray()).size(), bep44::SignatureBytes);
+    QCOMPARE(reply->body.stringAt("v").value_or(QByteArray()), QByteArray("first"));
+
+    // a getter that already has this sequence number is told the seq only
+    BValue::Dict getSameSeq;
+    getSameSeq.emplace("target", BValue(target.toBytes()));
+    getSameSeq.emplace("seq", BValue(qint64(1)));
+    reply = exchange(client, port, "g2", "get", withId(clientId, std::move(getSameSeq)));
+    QVERIFY(reply);
+    QCOMPARE(reply->body.integerAt("seq").value_or(0), qint64(1));
+    QVERIFY(!reply->body.find("v"));
+    QVERIFY(!reply->body.find("sig"));
+
+    // a newer sequence replaces it
+    reply = put("m2", "6:second", 2, std::nullopt, false);
+    QVERIFY(reply);
+    QCOMPARE(reply->type, krpc::MessageType::Response);
+    QCOMPARE(engine->items().mutableItem(target)->value, QByteArray("6:second"));
+
+    // an older one is refused
+    reply = put("m3", "5:stale", 1, std::nullopt, false);
+    QVERIFY(reply);
+    QCOMPARE(reply->errorCode, qint64(bep44::SequenceTooLow));
+
+    // so is a stale compare-and-swap
+    reply = put("m4", "5:third", 3, 1, false);
+    QVERIFY(reply);
+    QCOMPARE(reply->errorCode, qint64(bep44::CasMismatch));
+    reply = put("m5", "5:third", 3, 2, false);
+    QVERIFY(reply);
+    QCOMPARE(reply->type, krpc::MessageType::Response);
+
+    // and a bad signature never reaches storage
+    reply = put("m6", "6:forged", 4, std::nullopt, true);
+    QVERIFY(reply);
+    QCOMPARE(reply->errorCode, qint64(bep44::InvalidSignature));
+    QCOMPARE(engine->items().mutableItem(target)->value, QByteArray("5:third"));
 }
 
 int runTestEngine(int argc, char **argv)

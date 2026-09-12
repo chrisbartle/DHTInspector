@@ -1,6 +1,7 @@
 qt_add_library(dhtcore STATIC
     include/dhtcore/Bencode.h       src/Bencode.cpp
     include/dhtcore/Bep42.h         src/Bep42.cpp
+    include/dhtcore/Bep44.h         src/Bep44.cpp
     include/dhtcore/Crc32c.h        src/Crc32c.cpp
     include/dhtcore/DhtEngine.h     src/DhtEngine.cpp
     include/dhtcore/DhtNode.h       src/DhtNode.cpp
@@ -23,6 +24,9 @@ target_link_libraries(dhtcore PUBLIC
     Qt6::Core
     Qt6::Network
 )
+
+# Ed25519 for BEP 44 mutable items.
+target_link_libraries(dhtcore PRIVATE monocypher)
 
 if(WIN32)
     target_link_libraries(dhtcore PRIVATE iphlpapi ws2_32)

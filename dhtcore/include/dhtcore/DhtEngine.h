@@ -68,12 +68,19 @@ public:
 
     DhtNode *node(Family family) const { return family == Family::IPv4 ? m_v4 : m_v6; }
     const PeerStorage &storage() const { return m_storage; }
+    const ItemStorage &items() const { return m_items; }
     PortMapper *portMapper() const { return m_mapper; }
 
     EngineSnapshot snapshot() const;
 
+    // Contents of the data store. Listing is capped; the snapshot says so.
+    static constexpr int MaxListedInfohashes = 1000;
+    StorageSnapshot storageSnapshot() const;
+    void requestStorageSnapshot();
+
 signals:
     void snapshotReady(const dht::EngineSnapshot &snapshot);
+    void storageSnapshotReady(const dht::StorageSnapshot &snapshot);
     void notice(const QString &message, bool isError);
 
 private:
@@ -83,6 +90,7 @@ private:
 
     EngineConfig m_config;
     PeerStorage m_storage;
+    ItemStorage m_items;
     DhtNode *m_v4 = nullptr;
     DhtNode *m_v6 = nullptr;
     QString m_v6Error;

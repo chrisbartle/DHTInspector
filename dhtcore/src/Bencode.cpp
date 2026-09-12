@@ -4,6 +4,27 @@
 
 namespace dht {
 
+BValue BValue::preEncoded(const QByteArray &bytes)
+{
+    BValue value;
+    value.m_type = Type::PreEncoded;
+    value.m_string = bytes;
+    return value;
+}
+
+QByteArray BValue::rawSpan(QByteArrayView source) const
+{
+    if (m_rawStart < 0 || m_rawLength <= 0 || m_rawStart + m_rawLength > source.size())
+        return {};
+    return source.sliced(m_rawStart, m_rawLength).toByteArray();
+}
+
+void BValue::setRawSpan(qsizetype start, qsizetype length)
+{
+    m_rawStart = start;
+    m_rawLength = length;
+}
+
 const BValue::List &BValue::toList() const
 {
     static const List empty;
@@ -90,6 +111,15 @@ private:
     static bool isDigit(char c) { return c >= '0' && c <= '9'; }
 
     bool parseValue(BValue &out, int depth)
+    {
+        const qsizetype start = m_pos;
+        if (!parseValueInner(out, depth))
+            return false;
+        out.setRawSpan(start, m_pos - start);
+        return true;
+    }
+
+    bool parseValueInner(BValue &out, int depth)
     {
         if (atEnd())
             return fail(QStringLiteral("unexpected end of data"));
@@ -249,6 +279,9 @@ void encodeInto(const BValue &value, QByteArray &out)
         out += 'i';
         out += QByteArray::number(value.toInteger());
         out += 'e';
+        break;
+    case BValue::Type::PreEncoded:
+        out += value.toPreEncodedBytes();
         break;
     case BValue::Type::String: {
         const QByteArray s = value.toString();

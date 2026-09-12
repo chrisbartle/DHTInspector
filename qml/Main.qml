@@ -40,7 +40,7 @@ ApplicationWindow {
                 background: null
 
                 Repeater {
-                    model: [qsTr("Setup"), qsTr("Global Health"), qsTr("Probe Node")]
+                    model: [qsTr("Setup"), qsTr("Global Health"), qsTr("Probe Node"), qsTr("Data Store")]
 
                     delegate: TabButton {
                         id: tabButton
@@ -96,6 +96,7 @@ ApplicationWindow {
         SetupPage {}
         GlobalHealthPage {}
         ProbeNodePage {}
+        DataStorePage {}
     }
 
     footer: Rectangle {

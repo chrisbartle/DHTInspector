@@ -36,7 +36,11 @@ DhtEngine::DhtEngine(QObject *parent)
     m_coalesceTimer.setInterval(150);
     connect(&m_coalesceTimer, &QTimer::timeout, this, &DhtEngine::publishSnapshot);
     connect(&m_snapshotTimer, &QTimer::timeout, this, &DhtEngine::publishSnapshot);
-    connect(&m_expiryTimer, &QTimer::timeout, this, [this] { m_storage.expire(nowMs()); });
+    connect(&m_expiryTimer, &QTimer::timeout, this, [this] {
+        const qint64 now = nowMs();
+        m_storage.expire(now);
+        m_items.expire(now);
+    });
 }
 
 DhtEngine::~DhtEngine()
@@ -59,7 +63,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
     v4.nodeId = config.nodeIdV4;
     v4.version = clientVersion();
 
-    m_v4 = new DhtNode(v4, &m_storage, this);
+    m_v4 = new DhtNode(v4, &m_storage, &m_items, this);
     if (!m_v4->bind(error)) {
         delete m_v4;
         m_v4 = nullptr;
@@ -73,7 +77,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
         v6.bindAddress = config.bindAddressV6;
         v6.nodeId = config.nodeIdV6;
         v6.port = m_v4->port(); // same port number on both families
-        m_v6 = new DhtNode(v6, &m_storage, this);
+        m_v6 = new DhtNode(v6, &m_storage, &m_items, this);
         if (m_v6->bind(&m_v6Error)) {
             connect(m_v6, &DhtNode::changed, this, &DhtEngine::scheduleSnapshot);
             m_v4->setSibling(m_v6);
@@ -124,6 +128,7 @@ void DhtEngine::shutdown()
     destroy(m_v6);
     destroy(m_v4);
     m_storage.clear();
+    m_items.clear();
     m_v6Error.clear();
 }
 
@@ -286,6 +291,82 @@ EngineSnapshot DhtEngine::snapshot() const
     std::sort(s.nodes.begin(), s.nodes.end(),
               [](const NodeRow &a, const NodeRow &b) { return a.sortKey < b.sortKey; });
     return s;
+}
+
+StorageSnapshot DhtEngine::storageSnapshot() const
+{
+    StorageSnapshot out;
+    out.running = m_running;
+    out.ttlMs = PeerStorage::PeerTtlMs;
+    out.maxInfohashes = PeerStorage::MaxInfohashes;
+    out.maxPeersPerInfohash = PeerStorage::MaxPeersPerInfohash;
+    out.itemTtlMs = bep44::ItemTtlMs;
+    out.maxItems = ItemStorage::MaxItems;
+    if (!m_running)
+        return out;
+
+    out.immutableCount = m_items.immutableCount();
+    out.mutableCount = m_items.mutableCount();
+
+    out.infohashCount = m_storage.infohashCount();
+    out.peerCount = m_storage.peerCount();
+
+    const qint64 now = nowMs();
+    std::vector<StoredInfohash> stored = m_storage.snapshot();
+    std::sort(stored.begin(), stored.end(), [](const StoredInfohash &a, const StoredInfohash &b) {
+        return a.lastAnnounce > b.lastAnnounce;
+    });
+    if (int(stored.size()) > MaxListedInfohashes) {
+        stored.resize(MaxListedInfohashes);
+        out.truncated = true;
+    }
+
+    for (const StoredInfohash &entry : stored) {
+        StoredInfohashRow row;
+        row.infohash = entry.infohash;
+        row.peerCount = int(entry.peers.size());
+        row.lastAnnounceAgoMs = now - entry.lastAnnounce;
+        for (const StoredPeer &peer : entry.peers) {
+            StoredPeerRow out_peer;
+            out_peer.endpoint = peer.endpoint;
+            out_peer.ageMs = now - peer.announcedAt;
+            out_peer.expiresInMs = PeerStorage::PeerTtlMs - out_peer.ageMs;
+            row.expiresInMs = std::max(row.expiresInMs, out_peer.expiresInMs);
+            row.peers.push_back(out_peer);
+        }
+        std::sort(row.peers.begin(), row.peers.end(),
+                  [](const StoredPeerRow &a, const StoredPeerRow &b) { return a.ageMs < b.ageMs; });
+        out.infohashes.push_back(std::move(row));
+    }
+
+    for (const ImmutableItem &item : m_items.immutableSnapshot()) {
+        StoredItemRow row;
+        row.target = item.target;
+        row.value = item.value;
+        row.ageMs = now - item.storedAt;
+        row.expiresInMs = bep44::ItemTtlMs - row.ageMs;
+        out.items.push_back(std::move(row));
+    }
+    for (const MutableItem &item : m_items.mutableSnapshot()) {
+        StoredItemRow row;
+        row.isMutable = true;
+        row.target = item.target;
+        row.value = item.value;
+        row.publicKey = item.publicKey;
+        row.salt = item.salt;
+        row.sequence = item.sequence;
+        row.ageMs = now - item.storedAt;
+        row.expiresInMs = bep44::ItemTtlMs - row.ageMs;
+        out.items.push_back(std::move(row));
+    }
+    std::sort(out.items.begin(), out.items.end(),
+              [](const StoredItemRow &a, const StoredItemRow &b) { return a.ageMs < b.ageMs; });
+    return out;
+}
+
+void DhtEngine::requestStorageSnapshot()
+{
+    emit storageSnapshotReady(storageSnapshot());
 }
 
 void DhtEngine::scheduleSnapshot()
