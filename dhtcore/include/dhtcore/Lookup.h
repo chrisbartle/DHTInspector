@@ -17,7 +17,7 @@ class Lookup : public QObject
     Q_OBJECT
 
 public:
-    enum class Kind { FindNode, GetPeers };
+    enum class Kind { FindNode, GetPeers, GetItem };
 
     struct Contact
     {
@@ -34,6 +34,16 @@ public:
         std::vector<Endpoint> peers;   // get_peers only
         int queried = 0;
         int responded = 0;
+
+        // get only. A mutable item is kept when its signature checks out and
+        // its sequence number is the highest seen; an immutable one when its
+        // value hashes to the target.
+        bool itemFound = false;
+        bool itemIsMutable = false;
+        QByteArray itemValue;  // bencoded
+        QByteArray itemPublicKey;
+        QByteArray itemSignature;
+        qint64 itemSequence = -1;
     };
 
     // Sends `method` with `arguments` (the caller adds our "id") and invokes
@@ -51,6 +61,8 @@ public:
            QueryFn query, DoneFn done, QObject *parent = nullptr);
 
     void addCandidate(const NodeId &id, const Endpoint &endpoint);
+    // The salt a mutable item was published under; needed to check signatures.
+    void setSalt(const QByteArray &salt) { m_salt = salt; }
     void start();
 
     Kind kind() const { return m_kind; }
@@ -70,6 +82,7 @@ private:
 
     void step();
     void onReply(const Endpoint &endpoint, const RpcReply &reply);
+    void collectItem(const RpcReply &reply);
     void finish();
 
     Kind m_kind;
@@ -84,6 +97,13 @@ private:
     QSet<Endpoint> m_seen;
     QSet<Endpoint> m_peerSet;
     std::vector<Endpoint> m_peers;
+    QByteArray m_salt;
+    bool m_itemFound = false;
+    bool m_itemIsMutable = false;
+    QByteArray m_itemValue;
+    QByteArray m_itemPublicKey;
+    QByteArray m_itemSignature;
+    qint64 m_itemSequence = -1;
     int m_inFlight = 0;
     int m_queries = 0;
     int m_responded = 0;

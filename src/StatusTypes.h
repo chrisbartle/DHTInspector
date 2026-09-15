@@ -92,6 +92,74 @@ public:
     int activeLookups = 0;
 };
 
+class PeerSearchStatus
+{
+    Q_GADGET
+    QML_VALUE_TYPE(peerSearchStatus)
+    Q_PROPERTY(QString infohash MEMBER infohash)
+    Q_PROPERTY(int queried MEMBER queried)
+    Q_PROPERTY(int responded MEMBER responded)
+    Q_PROPERTY(bool done MEMBER done)
+
+public:
+    QString infohash;
+    int queried = 0;
+    int responded = 0;
+    bool done = false;
+};
+
+class ItemSearchStatus
+{
+    Q_GADGET
+    QML_VALUE_TYPE(itemSearchStatus)
+    Q_PROPERTY(bool done MEMBER done)
+    Q_PROPERTY(bool found MEMBER found)
+    Q_PROPERTY(bool isMutable MEMBER isMutable)
+    Q_PROPERTY(QString target MEMBER target)
+    Q_PROPERTY(QString value MEMBER value)
+    Q_PROPERTY(QString rawValue MEMBER rawValue)
+    Q_PROPERTY(QString publicKey MEMBER publicKey)
+    Q_PROPERTY(QString salt MEMBER salt)
+    Q_PROPERTY(QString signature MEMBER signature)
+    Q_PROPERTY(QString sequence MEMBER sequence)
+    Q_PROPERTY(int queried MEMBER queried)
+    Q_PROPERTY(int responded MEMBER responded)
+
+public:
+    bool done = false;
+    bool found = false;
+    bool isMutable = false;
+    QString target;
+    QString value;
+    QString rawValue;
+    QString publicKey;
+    QString salt;
+    QString signature;
+    QString sequence;
+    int queried = 0;
+    int responded = 0;
+};
+
+class PublishStatus
+{
+    Q_GADGET
+    QML_VALUE_TYPE(publishStatus)
+    Q_PROPERTY(QString kind MEMBER kind)
+    Q_PROPERTY(QString target MEMBER target)
+    Q_PROPERTY(int accepted MEMBER accepted)
+    Q_PROPERTY(int attempted MEMBER attempted)
+    Q_PROPERTY(QString error MEMBER error)
+    Q_PROPERTY(bool done MEMBER done)
+
+public:
+    QString kind;
+    QString target;
+    int accepted = 0;
+    int attempted = 0;
+    QString error;
+    bool done = false;
+};
+
 class DataStoreSummary
 {
     Q_GADGET

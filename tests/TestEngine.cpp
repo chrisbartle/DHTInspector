@@ -107,6 +107,7 @@ private slots:
     void storageSnapshotListsAnnouncedPeers();
     void bep44PutAndGet();
     void bep44MutableItems();
+    void searchesAndPublishesAcrossASwarm();
 };
 
 void TestEngine::swarmConvergesAndSharesPeers()
@@ -703,6 +704,114 @@ void TestEngine::bep44MutableItems()
     QVERIFY(reply);
     QCOMPARE(reply->errorCode, qint64(bep44::InvalidSignature));
     QCOMPARE(engine->items().mutableItem(target)->value, QByteArray("5:third"));
+}
+
+void TestEngine::searchesAndPublishesAcrossASwarm()
+{
+    // Four nodes that know each other, so lookups have somewhere to go.
+    constexpr int N = 4;
+    std::vector<std::unique_ptr<DhtEngine>> engines;
+    for (int i = 0; i < N; ++i) {
+        engines.push_back(startEngine());
+        QVERIFY(engines.back());
+    }
+    const quint16 seed = portOf(*engines[0]);
+    for (int i = 1; i < N; ++i) {
+        engines[i]->addNode(QStringLiteral("127.0.0.1"), seed);
+        QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*engines[0]) >= i, 5000);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(std::all_of(engines.begin(), engines.end(),
+                                         [](const auto &e) { return nodeCount(*e) == N - 1; }),
+                             10000);
+
+    DhtEngine &publisher = *engines[0];
+    DhtEngine &searcher = *engines[3];
+
+    // --- an immutable item, published and then found -------------------------
+    const QByteArray value = bencode(BValue(QByteArray("hello from the swarm")));
+    PublishResult published;
+    bool done = false;
+    connect(&publisher, &DhtEngine::publishFinished, this, [&](const PublishResult &r) {
+        published = r;
+        done = true;
+    });
+    publisher.publishImmutable(value);
+    QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
+    QCOMPARE(published.kind, PublishResult::Kind::Immutable);
+    QVERIFY(published.error.isEmpty());
+    QVERIFY(published.accepted > 0);
+    QCOMPARE(published.target, bep44::immutableTarget(value));
+
+    ItemSearchResult found;
+    done = false;
+    connect(&searcher, &DhtEngine::itemSearchFinished, this, [&](const ItemSearchResult &r) {
+        found = r;
+        done = true;
+    });
+    searcher.searchItem(published.target, QByteArray());
+    QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
+    QVERIFY2(found.found, "the immutable item was not found");
+    QVERIFY(!found.isMutable);
+    QCOMPARE(found.value, value);
+    QVERIFY(found.responded > 0);
+
+    // --- a mutable item, then an update ---------------------------------------
+    const ed25519::KeyPair keys = ed25519::randomKeyPair();
+    const QByteArray salt = "a-salt";
+    done = false;
+    publisher.publishMutable(keys.publicKey, keys.secretKey, salt, 1, bencode(BValue(QByteArray("first"))), std::nullopt);
+    QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
+    QCOMPARE(published.kind, PublishResult::Kind::Mutable);
+    QVERIFY(published.error.isEmpty());
+    QVERIFY(published.accepted > 0);
+    QCOMPARE(published.target, bep44::mutableTarget(keys.publicKey, salt));
+
+    done = false;
+    searcher.searchItem(published.target, salt);
+    QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
+    QVERIFY2(found.found, "the mutable item was not found");
+    QVERIFY(found.isMutable);
+    QCOMPARE(found.sequence, qint64(1));
+    QCOMPARE(found.value, bencode(BValue(QByteArray("first"))));
+    QCOMPARE(found.publicKey, keys.publicKey);
+
+    const NodeId mutableTarget = published.target;
+    done = false;
+    publisher.publishMutable(keys.publicKey, keys.secretKey, salt, 2, bencode(BValue(QByteArray("second"))), std::nullopt);
+    QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
+    QVERIFY(published.accepted > 0);
+
+    done = false;
+    searcher.searchItem(mutableTarget, salt);
+    QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
+    QCOMPARE(found.sequence, qint64(2));
+    QCOMPARE(found.value, bencode(BValue(QByteArray("second"))));
+
+    // --- announcing a peer, then searching for it ------------------------------
+    const NodeId infohash = NodeId::random();
+    done = false;
+    publisher.announcePeer(infohash, 4242, false);
+    QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
+    QCOMPARE(published.kind, PublishResult::Kind::Announce);
+    QVERIFY(published.accepted > 0);
+
+    PeerSearchResult peers;
+    done = false;
+    connect(&searcher, &DhtEngine::peerSearchFinished, this, [&](const PeerSearchResult &r) {
+        peers = r;
+        done = true;
+    });
+    searcher.searchPeers(infohash);
+    QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
+    QCOMPARE(peers.infohash, infohash);
+    QVERIFY(containsEndpoint(peers.peers, Endpoint(QHostAddress(QHostAddress::LocalHost), 4242)));
+
+    // --- a target nobody has ----------------------------------------------------
+    done = false;
+    searcher.searchItem(NodeId::random(), QByteArray());
+    QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
+    QVERIFY(!found.found);
+    QVERIFY(found.queried > 0);
 }
 
 int runTestEngine(int argc, char **argv)

@@ -59,6 +59,7 @@ qt_add_qml_module(DHTInspector
         qml/ThemedSwitch.qml
         qml/ThemedTextField.qml
         qml/EmptyState.qml
+        qml/SearchPage.qml
         qml/SetupPage.qml
         qml/DataStorePage.qml
         qml/GlobalHealthPage.qml

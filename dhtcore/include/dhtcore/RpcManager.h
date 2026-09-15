@@ -16,6 +16,7 @@ struct RpcReply
 
     Status status = Status::Timeout;
     krpc::Message message;  // empty on timeout
+    QByteArray datagram;    // the bytes the message was parsed from
     Endpoint from;
     int rttMs = -1;
 };
@@ -38,7 +39,7 @@ public:
 
     // Returns true if the response or error matched an outstanding query.
     // A reply only matches if it comes from the endpoint we queried.
-    bool handleReply(const krpc::Message &message, const Endpoint &from);
+    bool handleReply(const krpc::Message &message, const QByteArray &datagram, const Endpoint &from);
 
     int pendingCount() const { return int(m_pending.size()); }
     void cancelAll();

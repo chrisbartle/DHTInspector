@@ -1,5 +1,7 @@
 #include "dhtcore/DhtEngine.h"
 
+#include "dhtcore/Bep44.h"
+
 #include <QHostInfo>
 #include <QPointer>
 
@@ -259,6 +261,180 @@ void DhtEngine::announce(const NodeId &infohash, quint16 port, bool impliedPort,
         m_v4->announce(infohash, port, impliedPort, finishOne);
     if (m_v6)
         m_v6->announce(infohash, port, impliedPort, finishOne);
+}
+
+void DhtEngine::searchPeers(const NodeId &infohash)
+{
+    struct State
+    {
+        int remaining = 0;
+        PeerSearchResult result;
+    };
+    auto state = std::make_shared<State>();
+    state->result.infohash = infohash;
+    state->remaining = (m_v4 ? 1 : 0) + (m_v6 ? 1 : 0);
+    if (state->remaining == 0) {
+        emit peerSearchFinished(state->result);
+        return;
+    }
+
+    QPointer<DhtEngine> self(this);
+    const auto collect = [self, state](const Lookup::Result &result) {
+        state->result.peers.insert(state->result.peers.end(), result.peers.begin(), result.peers.end());
+        state->result.queried += result.queried;
+        state->result.responded += result.responded;
+        if (--state->remaining == 0 && self)
+            emit self->peerSearchFinished(state->result);
+    };
+    if (m_v4)
+        m_v4->getPeers(infohash, collect);
+    if (m_v6)
+        m_v6->getPeers(infohash, collect);
+}
+
+void DhtEngine::searchItem(const NodeId &target, const QByteArray &salt)
+{
+    struct State
+    {
+        int remaining = 0;
+        ItemSearchResult result;
+    };
+    auto state = std::make_shared<State>();
+    state->result.target = target;
+    state->result.salt = salt;
+    state->remaining = (m_v4 ? 1 : 0) + (m_v6 ? 1 : 0);
+    if (state->remaining == 0) {
+        emit itemSearchFinished(state->result);
+        return;
+    }
+
+    QPointer<DhtEngine> self(this);
+    const auto collect = [self, state](const Lookup::Result &result) {
+        state->result.queried += result.queried;
+        state->result.responded += result.responded;
+        // Keep the newest mutable item, or any immutable one. Immutable items
+        // have no sequence number, so never compare on it alone.
+        if (result.itemFound && (!state->result.found || result.itemSequence > state->result.sequence)) {
+            state->result.found = true;
+            state->result.isMutable = result.itemIsMutable;
+            state->result.value = result.itemValue;
+            state->result.publicKey = result.itemPublicKey;
+            state->result.signature = result.itemSignature;
+            state->result.sequence = result.itemSequence;
+        }
+        if (--state->remaining == 0 && self)
+            emit self->itemSearchFinished(state->result);
+    };
+    if (m_v4)
+        m_v4->getItem(target, salt, collect);
+    if (m_v6)
+        m_v6->getItem(target, salt, collect);
+}
+
+void DhtEngine::announcePeer(const NodeId &infohash, quint16 port, bool impliedPort)
+{
+    PublishResult empty;
+    empty.kind = PublishResult::Kind::Announce;
+    empty.target = infohash;
+    if (!m_v4 && !m_v6) {
+        emit publishFinished(empty);
+        return;
+    }
+    QPointer<DhtEngine> self(this);
+    announce(infohash, port, impliedPort, [self, infohash](int accepted) {
+        if (!self)
+            return;
+        PublishResult result;
+        result.kind = PublishResult::Kind::Announce;
+        result.target = infohash;
+        result.accepted = accepted;
+        result.attempted = accepted;  // announce only reports acceptances
+        emit self->publishFinished(result);
+    });
+}
+
+void DhtEngine::publishImmutable(const QByteArray &bencodedValue)
+{
+    PublishResult result;
+    result.kind = PublishResult::Kind::Immutable;
+    result.target = bep44::immutableTarget(bencodedValue);
+    if (bencodedValue.size() > bep44::MaxValueBytes) {
+        result.error = QStringLiteral("value is larger than the %1 byte limit").arg(bep44::MaxValueBytes);
+        emit publishFinished(result);
+        return;
+    }
+
+    DhtNode::PutRequest request;
+    request.target = result.target;
+    request.value = bencodedValue;
+
+    auto state = std::make_shared<PublishResult>(result);
+    auto remaining = std::make_shared<int>((m_v4 ? 1 : 0) + (m_v6 ? 1 : 0));
+    if (*remaining == 0) {
+        emit publishFinished(*state);
+        return;
+    }
+    QPointer<DhtEngine> self(this);
+    const auto collect = [self, state, remaining](int accepted, int attempted) {
+        state->accepted += accepted;
+        state->attempted += attempted;
+        if (--*remaining == 0 && self)
+            emit self->publishFinished(*state);
+    };
+    if (m_v4)
+        m_v4->put(request, collect);
+    if (m_v6)
+        m_v6->put(request, collect);
+}
+
+void DhtEngine::publishMutable(const QByteArray &publicKey, const QByteArray &secretKey, const QByteArray &salt,
+                               qint64 sequence, const QByteArray &bencodedValue, std::optional<qint64> cas)
+{
+    PublishResult result;
+    result.kind = PublishResult::Kind::Mutable;
+    result.sequence = sequence;
+    result.target = bep44::mutableTarget(publicKey, salt);
+
+    const auto fail = [&](const QString &message) {
+        result.error = message;
+        emit publishFinished(result);
+    };
+    if (publicKey.size() != bep44::PublicKeyBytes || secretKey.size() != 64)
+        return fail(QStringLiteral("the key pair is not a valid Ed25519 key"));
+    if (bencodedValue.size() > bep44::MaxValueBytes)
+        return fail(QStringLiteral("value is larger than the %1 byte limit").arg(bep44::MaxValueBytes));
+    if (salt.size() > bep44::MaxSaltBytes)
+        return fail(QStringLiteral("salt is longer than %1 bytes").arg(bep44::MaxSaltBytes));
+
+    DhtNode::PutRequest request;
+    request.target = result.target;
+    request.value = bencodedValue;
+    request.isMutable = true;
+    request.publicKey = publicKey;
+    request.salt = salt;
+    request.sequence = sequence;
+    request.cas = cas;
+    request.signature = ed25519::sign(bep44::signingBuffer(salt, sequence, bencodedValue), secretKey);
+    if (request.signature.isEmpty())
+        return fail(QStringLiteral("could not sign the item"));
+
+    auto state = std::make_shared<PublishResult>(result);
+    auto remaining = std::make_shared<int>((m_v4 ? 1 : 0) + (m_v6 ? 1 : 0));
+    if (*remaining == 0) {
+        emit publishFinished(*state);
+        return;
+    }
+    QPointer<DhtEngine> self(this);
+    const auto collect = [self, state, remaining](int accepted, int attempted) {
+        state->accepted += accepted;
+        state->attempted += attempted;
+        if (--*remaining == 0 && self)
+            emit self->publishFinished(*state);
+    };
+    if (m_v4)
+        m_v4->put(request, collect);
+    if (m_v6)
+        m_v6->put(request, collect);
 }
 
 EngineSnapshot DhtEngine::snapshot() const

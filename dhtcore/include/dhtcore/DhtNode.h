@@ -56,8 +56,23 @@ public:
     // Bootstrap routers are used for joining but never enter the table.
     void addSeed(const Endpoint &endpoint, SeedSource source);
 
+    // What to write to the nodes closest to a target.
+    struct PutRequest
+    {
+        NodeId target;
+        QByteArray value;  // bencoded
+        bool isMutable = false;
+        QByteArray publicKey;
+        QByteArray salt;
+        QByteArray signature;
+        qint64 sequence = 0;
+        std::optional<qint64> cas;
+    };
+
     void findNode(const NodeId &target, Lookup::DoneFn done);
     void getPeers(const NodeId &infohash, Lookup::DoneFn done);
+    void getItem(const NodeId &target, const QByteArray &salt, Lookup::DoneFn done);
+    void put(const PutRequest &request, std::function<void(int accepted, int attempted)> done);
     void announce(const NodeId &infohash, quint16 port, bool impliedPort,
                   std::function<void(int accepted)> done);
 
@@ -107,7 +122,8 @@ private:
     BValue::Dict nodesFor(const NodeId &target, const BValue &arguments) const;
 
     Lookup *startLookup(Lookup::Kind kind, const NodeId &target, Lookup::DoneFn done,
-                        const std::vector<krpc::CompactNode> &extraCandidates = {});
+                        const std::vector<krpc::CompactNode> &extraCandidates = {},
+                        const QByteArray &salt = {});
 
     NodeConfig m_config;
     PeerStorage *m_storage;

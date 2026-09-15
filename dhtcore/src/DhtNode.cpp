@@ -164,7 +164,7 @@ void DhtNode::handleDatagram(const QByteArray &data, const Endpoint &from)
     if (message.type == krpc::MessageType::Query)
         handleQuery(message, from, data);
     else if (m_rpc)
-        m_rpc->handleReply(message, from);
+        m_rpc->handleReply(message, data, from);
 }
 
 void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from, const QByteArray &datagram)
@@ -537,7 +537,7 @@ void DhtNode::addSeed(const Endpoint &endpoint, SeedSource source)
 }
 
 Lookup *DhtNode::startLookup(Lookup::Kind kind, const NodeId &target, Lookup::DoneFn done,
-                             const std::vector<krpc::CompactNode> &extraCandidates)
+                             const std::vector<krpc::CompactNode> &extraCandidates, const QByteArray &salt)
 {
     QPointer<DhtNode> self(this);
     auto *lookup = new Lookup(
@@ -553,6 +553,7 @@ Lookup *DhtNode::startLookup(Lookup::Kind kind, const NodeId &target, Lookup::Do
                 emit self->changed();
         },
         this);
+    lookup->setSalt(salt);
 
     for (const RoutingNode &node : m_table.closest(target, Lookup::K * 2))
         lookup->addCandidate(node.id, node.endpoint);
@@ -572,6 +573,57 @@ void DhtNode::findNode(const NodeId &target, Lookup::DoneFn done)
 void DhtNode::getPeers(const NodeId &infohash, Lookup::DoneFn done)
 {
     startLookup(Lookup::Kind::GetPeers, infohash, std::move(done));
+}
+
+void DhtNode::getItem(const NodeId &target, const QByteArray &salt, Lookup::DoneFn done)
+{
+    startLookup(Lookup::Kind::GetItem, target, std::move(done), {}, salt);
+}
+
+void DhtNode::put(const PutRequest &request, std::function<void(int, int)> done)
+{
+    QPointer<DhtNode> self(this);
+    // The same lookup that finds the closest nodes collects their write tokens.
+    startLookup(
+        Lookup::Kind::GetItem, request.target,
+        [self, request, done](const Lookup::Result &result) {
+            if (!self) {
+                if (done)
+                    done(0, 0);
+                return;
+            }
+            auto pending = std::make_shared<int>(0);
+            auto accepted = std::make_shared<int>(0);
+            auto attempted = std::make_shared<int>(0);
+            for (const Lookup::Contact &contact : result.closest) {
+                if (contact.token.isEmpty())
+                    continue;
+                BValue::Dict args;
+                args.emplace("token", BValue(contact.token));
+                args.emplace("v", BValue::preEncoded(request.value));
+                if (request.isMutable) {
+                    args.emplace("k", BValue(request.publicKey));
+                    args.emplace("seq", BValue(request.sequence));
+                    args.emplace("sig", BValue(request.signature));
+                    if (!request.salt.isEmpty())
+                        args.emplace("salt", BValue(request.salt));
+                    if (request.cas)
+                        args.emplace("cas", BValue(*request.cas));
+                }
+                ++*pending;
+                ++*attempted;
+                self->sendQuery(contact.endpoint, "put", std::move(args),
+                                [pending, accepted, attempted, done](const RpcReply &reply) {
+                                    if (reply.status == RpcReply::Status::Response)
+                                        ++*accepted;
+                                    if (--*pending == 0 && done)
+                                        done(*accepted, *attempted);
+                                });
+            }
+            if (*pending == 0 && done)
+                done(0, *attempted);
+        },
+        {}, request.salt);
 }
 
 void DhtNode::announce(const NodeId &infohash, quint16 port, bool impliedPort, std::function<void(int)> done)

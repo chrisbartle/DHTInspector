@@ -159,7 +159,47 @@ struct StorageSnapshot
     std::vector<StoredItemRow> items;  // most recently stored first
 };
 
+// --- search and publish results ---------------------------------------------
+
+struct PeerSearchResult
+{
+    NodeId infohash;
+    std::vector<Endpoint> peers;
+    int queried = 0;
+    int responded = 0;
+};
+
+struct ItemSearchResult
+{
+    NodeId target;
+    bool found = false;
+    bool isMutable = false;
+    QByteArray value;  // bencoded, as stored in the DHT
+    QByteArray publicKey;
+    QByteArray salt;
+    QByteArray signature;
+    qint64 sequence = -1;
+    int queried = 0;
+    int responded = 0;
+};
+
+// Announce and put both write to the nodes closest to a target.
+struct PublishResult
+{
+    enum class Kind { Announce, Immutable, Mutable };
+
+    Kind kind = Kind::Announce;
+    NodeId target;
+    int accepted = 0;   // nodes that stored it
+    int attempted = 0;  // nodes we asked
+    qint64 sequence = -1;
+    QString error;
+};
+
 } // namespace dht
 
 Q_DECLARE_METATYPE(dht::EngineSnapshot)
+Q_DECLARE_METATYPE(dht::PeerSearchResult)
+Q_DECLARE_METATYPE(dht::ItemSearchResult)
+Q_DECLARE_METATYPE(dht::PublishResult)
 Q_DECLARE_METATYPE(dht::StorageSnapshot)

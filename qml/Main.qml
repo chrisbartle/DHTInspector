@@ -40,7 +40,7 @@ ApplicationWindow {
                 background: null
 
                 Repeater {
-                    model: [qsTr("Setup"), qsTr("Global Health"), qsTr("Probe Node"), qsTr("Data Store")]
+                    model: [qsTr("Setup"), qsTr("Search"), qsTr("Global Health"), qsTr("Probe Node"), qsTr("Data Store")]
 
                     delegate: TabButton {
                         id: tabButton
@@ -94,6 +94,7 @@ ApplicationWindow {
         currentIndex: tabBar.currentIndex
 
         SetupPage {}
+        SearchPage {}
         GlobalHealthPage {}
         ProbeNodePage {}
         DataStorePage {}

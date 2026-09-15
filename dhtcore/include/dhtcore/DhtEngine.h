@@ -66,6 +66,15 @@ public:
     void getPeers(const NodeId &infohash, std::function<void(const std::vector<Endpoint> &peers)> done);
     void announce(const NodeId &infohash, quint16 port, bool impliedPort, std::function<void(int accepted)> done);
 
+    // Searching and publishing for the Search tab. Each reports through the
+    // matching signal when every address family has finished.
+    void searchPeers(const NodeId &infohash);
+    void searchItem(const NodeId &target, const QByteArray &salt);
+    void announcePeer(const NodeId &infohash, quint16 port, bool impliedPort);
+    void publishImmutable(const QByteArray &bencodedValue);
+    void publishMutable(const QByteArray &publicKey, const QByteArray &secretKey, const QByteArray &salt,
+                        qint64 sequence, const QByteArray &bencodedValue, std::optional<qint64> cas);
+
     DhtNode *node(Family family) const { return family == Family::IPv4 ? m_v4 : m_v6; }
     const PeerStorage &storage() const { return m_storage; }
     const ItemStorage &items() const { return m_items; }
@@ -81,6 +90,9 @@ public:
 signals:
     void snapshotReady(const dht::EngineSnapshot &snapshot);
     void storageSnapshotReady(const dht::StorageSnapshot &snapshot);
+    void peerSearchFinished(const dht::PeerSearchResult &result);
+    void itemSearchFinished(const dht::ItemSearchResult &result);
+    void publishFinished(const dht::PublishResult &result);
     void notice(const QString &message, bool isError);
 
 private:

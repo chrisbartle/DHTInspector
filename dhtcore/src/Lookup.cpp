@@ -1,5 +1,7 @@
 #include "dhtcore/Lookup.h"
 
+#include "dhtcore/Bep44.h"
+
 #include <QPointer>
 
 #include <algorithm>
@@ -57,8 +59,10 @@ void Lookup::step()
     if (m_finished)
         return;
 
-    const QByteArray method = m_kind == Kind::FindNode ? QByteArray("find_node") : QByteArray("get_peers");
-    const QByteArray key = m_kind == Kind::FindNode ? QByteArray("target") : QByteArray("info_hash");
+    const QByteArray method = m_kind == Kind::FindNode ? QByteArray("find_node")
+                              : m_kind == Kind::GetPeers ? QByteArray("get_peers")
+                                                         : QByteArray("get");
+    const QByteArray key = m_kind == Kind::GetPeers ? QByteArray("info_hash") : QByteArray("target");
 
     // Pick what to send first; sending can call back synchronously and
     // mutate m_candidates.
@@ -123,6 +127,9 @@ void Lookup::onReply(const Endpoint &endpoint, const RpcReply &reply)
     if (const auto nodes = body.stringAt(nodesKey))
         found = krpc::decodeNodes(*nodes, m_family).nodes;
 
+    if (m_kind == Kind::GetItem)
+        collectItem(reply);
+
     if (m_kind == Kind::GetPeers) {
         for (const Endpoint &peer : krpc::decodePeers(body.listAt("values"), m_family)) {
             if (!m_peerSet.contains(peer)) {
@@ -142,6 +149,47 @@ void Lookup::onReply(const Endpoint &endpoint, const RpcReply &reply)
     step();
 }
 
+void Lookup::collectItem(const RpcReply &reply)
+{
+    const BValue &body = reply.message.body;
+    const BValue *value = body.find("v");
+    if (!value)
+        return;
+    // BEP 44 hashes and signs the value's bytes as sent, so take them from the
+    // datagram rather than re-encoding.
+    const QByteArray raw = value->rawSpan(reply.datagram);
+    if (raw.isEmpty())
+        return;
+
+    const auto key = body.stringAt("k");
+    const auto signature = body.stringAt("sig");
+    const auto sequence = body.integerAt("seq");
+
+    if (key && signature && sequence) {
+        if (key->size() != bep44::PublicKeyBytes || signature->size() != bep44::SignatureBytes)
+            return;
+        if (bep44::mutableTarget(*key, m_salt) != m_target)
+            return;
+        if (*sequence <= m_itemSequence)
+            return;
+        if (!ed25519::verify(*signature, bep44::signingBuffer(m_salt, *sequence, raw), *key).value_or(false))
+            return;
+        m_itemFound = true;
+        m_itemIsMutable = true;
+        m_itemValue = raw;
+        m_itemPublicKey = *key;
+        m_itemSignature = *signature;
+        m_itemSequence = *sequence;
+        return;
+    }
+
+    if (!m_itemFound && bep44::immutableTarget(raw) == m_target) {
+        m_itemFound = true;
+        m_itemIsMutable = false;
+        m_itemValue = raw;
+    }
+}
+
 void Lookup::finish()
 {
     m_finished = true;
@@ -152,6 +200,12 @@ void Lookup::finish()
     result.peers = m_peers;
     result.queried = m_queries;
     result.responded = m_responded;
+    result.itemFound = m_itemFound;
+    result.itemIsMutable = m_itemIsMutable;
+    result.itemValue = m_itemValue;
+    result.itemPublicKey = m_itemPublicKey;
+    result.itemSignature = m_itemSignature;
+    result.itemSequence = m_itemSequence;
     for (const Candidate &c : m_candidates) {
         if (int(result.closest.size()) >= K)
             break;

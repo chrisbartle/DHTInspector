@@ -1,5 +1,6 @@
 #include "DhtController.h"
 
+#include "dhtcore/Bep44.h"
 #include "dhtcore/DhtEngine.h"
 
 #include <QRegularExpression>
@@ -77,6 +78,9 @@ DhtController::DhtController(QObject *parent)
 {
     qRegisterMetaType<dht::EngineSnapshot>();
     qRegisterMetaType<dht::StorageSnapshot>();
+    qRegisterMetaType<dht::PeerSearchResult>();
+    qRegisterMetaType<dht::ItemSearchResult>();
+    qRegisterMetaType<dht::PublishResult>();
 
     // DHT Inspector is a standalone utility with no preconditions: every
     // launch starts from the defaults in DhtController.h and nothing is saved
@@ -241,6 +245,21 @@ void DhtController::startEngine()
         if (generation == m_generation)
             setNotice(text, isError);
     });
+    connect(m_engine, &dht::DhtEngine::peerSearchFinished, this,
+            [this, generation](const dht::PeerSearchResult &result) {
+                if (generation == m_generation)
+                    applyPeerSearch(result);
+            });
+    connect(m_engine, &dht::DhtEngine::itemSearchFinished, this,
+            [this, generation](const dht::ItemSearchResult &result) {
+                if (generation == m_generation)
+                    applyItemSearch(result);
+            });
+    connect(m_engine, &dht::DhtEngine::publishFinished, this,
+            [this, generation](const dht::PublishResult &result) {
+                if (generation == m_generation)
+                    applyPublish(result);
+            });
     connect(m_engine, &dht::DhtEngine::storageSnapshotReady, this,
             [this, generation](const dht::StorageSnapshot &snapshot) {
                 if (generation == m_generation && m_running)
@@ -314,6 +333,7 @@ void DhtController::resetStatus()
     m_stats = EngineStatistics{};
     m_nodes->clear();
     clearDataStore();
+    clearSearch();
     emit snapshotChanged();
 }
 
@@ -447,6 +467,188 @@ void DhtController::clearDataStore()
     m_selectedInfohash.clear();
     m_dataStore = DataStoreSummary{};
     emit dataStoreChanged();
+}
+
+QString DhtController::validateHash(const QString &text) const
+{
+    const QString hash = text.trimmed();
+    if (hash.isEmpty())
+        return {};
+    static const QRegularExpression hex(QStringLiteral("^[0-9A-Fa-f]*$"));
+    if (!hex.match(hash).hasMatch())
+        return tr("only hexadecimal digits 0-9 and a-f are allowed");
+    if (hash.size() != dht::NodeId::Size * 2)
+        return tr("needs 40 hexadecimal digits, has %1").arg(hash.size());
+    return {};
+}
+
+void DhtController::searchPeers(const QString &hash)
+{
+    const auto target = dht::NodeId::fromHex(hash.trimmed());
+    if (!m_engine || !target)
+        return;
+    m_peerResults.clear();
+    m_peerSearch = PeerSearchStatus{};
+    m_peerSearch.infohash = target->toHex();
+    m_searchBusy = true;
+    m_searchStatus = tr("Searching the DHT for peers on %1…").arg(target->toHex());
+    emit searchChanged();
+    QMetaObject::invokeMethod(m_engine, [engine = m_engine, id = *target] { engine->searchPeers(id); },
+                              Qt::QueuedConnection);
+}
+
+void DhtController::searchItem(const QString &hash, const QString &salt)
+{
+    const auto target = dht::NodeId::fromHex(hash.trimmed());
+    if (!m_engine || !target)
+        return;
+    m_itemSearch = ItemSearchStatus{};
+    m_itemSearch.target = target->toHex();
+    m_itemSearch.salt = salt;
+    m_searchBusy = true;
+    m_searchStatus = tr("Fetching the item stored under %1…").arg(target->toHex());
+    emit searchChanged();
+    QMetaObject::invokeMethod(
+        m_engine, [engine = m_engine, id = *target, salt = salt.toUtf8()] { engine->searchItem(id, salt); },
+        Qt::QueuedConnection);
+}
+
+void DhtController::announcePeer(const QString &hash, int port, bool impliedPort)
+{
+    const auto target = dht::NodeId::fromHex(hash.trimmed());
+    if (!m_engine || !target)
+        return;
+    m_publishStatus = PublishStatus{};
+    m_publishBusy = true;
+    emit publishChanged();
+    QMetaObject::invokeMethod(m_engine,
+                              [engine = m_engine, id = *target, port = quint16(std::clamp(port, 1, 65535)), impliedPort] {
+                                  engine->announcePeer(id, port, impliedPort);
+                              },
+                              Qt::QueuedConnection);
+}
+
+void DhtController::publishImmutable(const QString &text)
+{
+    if (!m_engine)
+        return;
+    const QByteArray value = dht::bencode(dht::BValue(text.toUtf8()));
+    m_publishStatus = PublishStatus{};
+    m_publishBusy = true;
+    emit publishChanged();
+    QMetaObject::invokeMethod(m_engine, [engine = m_engine, value] { engine->publishImmutable(value); },
+                              Qt::QueuedConnection);
+}
+
+void DhtController::publishMutable(const QString &publicKeyHex, const QString &secretKeyHex, const QString &salt,
+                                   int sequence, const QString &text)
+{
+    if (!m_engine)
+        return;
+    const QByteArray publicKey = QByteArray::fromHex(publicKeyHex.trimmed().toLatin1());
+    const QByteArray secretKey = QByteArray::fromHex(secretKeyHex.trimmed().toLatin1());
+    const QByteArray value = dht::bencode(dht::BValue(text.toUtf8()));
+
+    m_publishStatus = PublishStatus{};
+    if (publicKey.size() != dht::bep44::PublicKeyBytes || secretKey.size() != 64) {
+        m_publishStatus.error = tr("The key pair must be 64 and 128 hexadecimal digits.");
+        m_publishStatus.done = true;
+        emit publishChanged();
+        return;
+    }
+
+    m_publishBusy = true;
+    emit publishChanged();
+    QMetaObject::invokeMethod(m_engine,
+                              [engine = m_engine, publicKey, secretKey, salt = salt.toUtf8(),
+                               sequence = qint64(sequence), value] {
+                                  engine->publishMutable(publicKey, secretKey, salt, sequence, value, std::nullopt);
+                              },
+                              Qt::QueuedConnection);
+}
+
+QVariantMap DhtController::generateKeyPair() const
+{
+    const dht::ed25519::KeyPair keys = dht::ed25519::randomKeyPair();
+    return {{QStringLiteral("publicKey"), QString::fromLatin1(keys.publicKey.toHex())},
+            {QStringLiteral("secretKey"), QString::fromLatin1(keys.secretKey.toHex())}};
+}
+
+QString DhtController::immutableTargetFor(const QString &text) const
+{
+    return dht::bep44::immutableTarget(dht::bencode(dht::BValue(text.toUtf8()))).toHex();
+}
+
+QString DhtController::mutableTargetFor(const QString &publicKeyHex, const QString &salt) const
+{
+    const QByteArray publicKey = QByteArray::fromHex(publicKeyHex.trimmed().toLatin1());
+    if (publicKey.size() != dht::bep44::PublicKeyBytes)
+        return tr("— not a 64-digit public key —");
+    return dht::bep44::mutableTarget(publicKey, salt.toUtf8()).toHex();
+}
+
+void DhtController::applyPeerSearch(const dht::PeerSearchResult &result)
+{
+    m_peerResults.clear();
+    for (const dht::Endpoint &peer : result.peers)
+        m_peerResults << peer.toString();
+    m_peerResults.removeDuplicates();
+    m_peerSearch.infohash = result.infohash.toHex();
+    m_peerSearch.queried = result.queried;
+    m_peerSearch.responded = result.responded;
+    m_peerSearch.done = true;
+    m_searchBusy = false;
+    m_searchStatus = tr("%n peer(s) found for %1.", nullptr, int(m_peerResults.size())).arg(m_peerSearch.infohash);
+    emit searchChanged();
+}
+
+void DhtController::applyItemSearch(const dht::ItemSearchResult &result)
+{
+    m_itemSearch.done = true;
+    m_itemSearch.found = result.found;
+    m_itemSearch.isMutable = result.isMutable;
+    m_itemSearch.target = result.target.toHex();
+    m_itemSearch.value = result.found ? decodedPreview(result.value, 200) : QString();
+    m_itemSearch.rawValue = result.found ? previewValue(result.value, 200) : QString();
+    m_itemSearch.publicKey = QString::fromLatin1(result.publicKey.toHex());
+    m_itemSearch.salt = QString::fromUtf8(result.salt);
+    m_itemSearch.signature = QString::fromLatin1(result.signature.toHex());
+    m_itemSearch.sequence = result.sequence >= 0 ? QString::number(result.sequence) : QString();
+    m_itemSearch.queried = result.queried;
+    m_itemSearch.responded = result.responded;
+    m_searchBusy = false;
+    m_searchStatus = result.found ? tr("Item found under %1.").arg(m_itemSearch.target)
+                                  : tr("No item stored under %1.").arg(m_itemSearch.target);
+    emit searchChanged();
+}
+
+void DhtController::applyPublish(const dht::PublishResult &result)
+{
+    switch (result.kind) {
+    case dht::PublishResult::Kind::Announce: m_publishStatus.kind = tr("Announce"); break;
+    case dht::PublishResult::Kind::Immutable: m_publishStatus.kind = tr("Immutable item"); break;
+    case dht::PublishResult::Kind::Mutable: m_publishStatus.kind = tr("Mutable item"); break;
+    }
+    m_publishStatus.target = result.target.toHex();
+    m_publishStatus.accepted = result.accepted;
+    m_publishStatus.attempted = result.attempted;
+    m_publishStatus.error = result.error;
+    m_publishStatus.done = true;
+    m_publishBusy = false;
+    emit publishChanged();
+}
+
+void DhtController::clearSearch()
+{
+    m_peerResults.clear();
+    m_peerSearch = PeerSearchStatus{};
+    m_itemSearch = ItemSearchStatus{};
+    m_publishStatus = PublishStatus{};
+    m_searchBusy = false;
+    m_publishBusy = false;
+    m_searchStatus.clear();
+    emit searchChanged();
+    emit publishChanged();
 }
 
 QStringList DhtController::bootstrapRouters() const

@@ -48,6 +48,14 @@ class DhtController : public QObject
     Q_PROPERTY(DataStoreSummary dataStore READ dataStore NOTIFY dataStoreChanged)
     Q_PROPERTY(QString selectedInfohash READ selectedInfohash NOTIFY dataStoreChanged)
 
+    Q_PROPERTY(bool searchBusy READ searchBusy NOTIFY searchChanged)
+    Q_PROPERTY(QString searchStatus READ searchStatus NOTIFY searchChanged)
+    Q_PROPERTY(QStringList peerResults READ peerResults NOTIFY searchChanged)
+    Q_PROPERTY(PeerSearchStatus peerSearch READ peerSearch NOTIFY searchChanged)
+    Q_PROPERTY(ItemSearchStatus itemSearch READ itemSearch NOTIFY searchChanged)
+    Q_PROPERTY(bool publishBusy READ publishBusy NOTIFY publishChanged)
+    Q_PROPERTY(PublishStatus publishStatus READ publishStatus NOTIFY publishChanged)
+
     Q_PROPERTY(QString notice READ notice NOTIFY noticeChanged)
     Q_PROPERTY(bool noticeIsError READ noticeIsError NOTIFY noticeChanged)
 
@@ -87,6 +95,14 @@ public:
     DataStoreSummary dataStore() const { return m_dataStore; }
     QString selectedInfohash() const { return m_selectedInfohash; }
 
+    bool searchBusy() const { return m_searchBusy; }
+    QString searchStatus() const { return m_searchStatus; }
+    QStringList peerResults() const { return m_peerResults; }
+    PeerSearchStatus peerSearch() const { return m_peerSearch; }
+    ItemSearchStatus itemSearch() const { return m_itemSearch; }
+    bool publishBusy() const { return m_publishBusy; }
+    PublishStatus publishStatus() const { return m_publishStatus; }
+
     QString notice() const { return m_notice; }
     bool noticeIsError() const { return m_noticeIsError; }
 
@@ -104,6 +120,18 @@ public:
     Q_INVOKABLE void refreshDataStore();
     Q_INVOKABLE void selectInfohash(const QString &infohash);
 
+    // Search tab. Empty string from validateHash() means the text is usable.
+    Q_INVOKABLE QString validateHash(const QString &text) const;
+    Q_INVOKABLE void searchPeers(const QString &hash);
+    Q_INVOKABLE void searchItem(const QString &hash, const QString &salt);
+    Q_INVOKABLE void announcePeer(const QString &hash, int port, bool impliedPort);
+    Q_INVOKABLE void publishImmutable(const QString &text);
+    Q_INVOKABLE void publishMutable(const QString &publicKeyHex, const QString &secretKeyHex,
+                                    const QString &salt, int sequence, const QString &text);
+    Q_INVOKABLE QVariantMap generateKeyPair() const;
+    Q_INVOKABLE QString immutableTargetFor(const QString &text) const;
+    Q_INVOKABLE QString mutableTargetFor(const QString &publicKeyHex, const QString &salt) const;
+
 signals:
     void runningChanged();
     void statusChanged();
@@ -115,6 +143,8 @@ signals:
     void nodeIdV6Changed();
     void snapshotChanged();
     void dataStoreChanged();
+    void searchChanged();
+    void publishChanged();
     void noticeChanged();
 
 private:
@@ -124,6 +154,10 @@ private:
     void applySnapshot(const dht::EngineSnapshot &snapshot);
     void applyStorageSnapshot(const dht::StorageSnapshot &snapshot);
     void clearDataStore();
+    void clearSearch();
+    void applyPeerSearch(const dht::PeerSearchResult &result);
+    void applyItemSearch(const dht::ItemSearchResult &result);
+    void applyPublish(const dht::PublishResult &result);
     void resetStatus();
     void setNotice(const QString &text, bool isError);
 
@@ -150,6 +184,14 @@ private:
     StoredItemModel *m_storedItems;
     DataStoreSummary m_dataStore;
     QString m_selectedInfohash;
+
+    bool m_searchBusy = false;
+    QString m_searchStatus;
+    QStringList m_peerResults;
+    PeerSearchStatus m_peerSearch;
+    ItemSearchStatus m_itemSearch;
+    bool m_publishBusy = false;
+    PublishStatus m_publishStatus;
 
     QString m_notice;
     bool m_noticeIsError = false;

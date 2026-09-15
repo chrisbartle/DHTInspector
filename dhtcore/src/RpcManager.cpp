@@ -37,7 +37,7 @@ void RpcManager::query(const Endpoint &to, const QByteArray &method, BValue::Dic
     m_send(krpc::encodeQuery(tid, method, std::move(arguments), version), to);
 }
 
-bool RpcManager::handleReply(const krpc::Message &message, const Endpoint &from)
+bool RpcManager::handleReply(const krpc::Message &message, const QByteArray &datagram, const Endpoint &from)
 {
     const auto it = m_pending.find(message.transactionId);
     if (it == m_pending.end() || !(it->to == from))
@@ -50,6 +50,7 @@ bool RpcManager::handleReply(const krpc::Message &message, const Endpoint &from)
     reply.status = message.type == krpc::MessageType::Error ? RpcReply::Status::Error
                                                             : RpcReply::Status::Response;
     reply.message = message;
+    reply.datagram = datagram;
     reply.from = from;
     reply.rttMs = int(nowMs() - pending.sentAt);
     if (pending.callback)
