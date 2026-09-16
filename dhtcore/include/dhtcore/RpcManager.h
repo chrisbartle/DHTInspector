@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QTimer>
 
+#include <algorithm>
 #include <deque>
 #include <functional>
 
@@ -15,8 +16,8 @@ namespace dht {
 struct RpcReply
 {
     // Throttled: never sent, because too many queries were already waiting
-    // for that host. It says nothing about the node, so it must not count
-    // against it.
+    // for that host, or the operating system would not take the datagram.
+    // It says nothing about the node, so it must not count against it.
     enum class Status { Response, Error, Timeout, Throttled };
 
     Status status = Status::Timeout;
@@ -49,11 +50,15 @@ class RpcManager : public QObject
     Q_OBJECT
 
 public:
-    using SendFn = std::function<void(const QByteArray &datagram, const Endpoint &to)>;
+    // Returns false if the datagram could not be handed to the OS.
+    using SendFn = std::function<bool(const QByteArray &datagram, const Endpoint &to)>;
     using Callback = std::function<void(const RpcReply &reply)>;
 
     static constexpr int DefaultTimeoutMs = 3000;
     static constexpr int MaxQueuedTotal = 20000;
+    // Transaction ids are two bytes, so no more than this may await replies
+    // at once; beyond it queries wait like any others.
+    static constexpr int DefaultMaxPending = 60000;
 
     explicit RpcManager(SendFn send, QObject *parent = nullptr);
 
@@ -74,6 +79,7 @@ public:
     // The engine-wide byte budget; null means unlimited. Only consulted here:
     // whoever actually sends the datagram spends from it.
     void setBudget(SendBudget *budget) { m_budget = budget; }
+    void setMaxPending(int maxPending) { m_maxPending = std::clamp(maxPending, 1, 65536); }
 
     // Returns true if the response or error matched an outstanding query.
     // A reply only matches if it comes from the endpoint we queried.
@@ -81,8 +87,10 @@ public:
 
     int pendingCount() const { return int(m_pending.size()); }
     int queuedCount() const { return m_queuedTotal; }
+    int queuedFor(const QHostAddress &address) const;
     qint64 delayedCount() const { return m_delayed; }    // queries that had to wait
     qint64 refusedCount() const { return m_refused; }    // queries never sent
+    qint64 sendFailures() const { return m_sendFailures; }  // the OS would not take them
     void cancelAll();
 
 private:
@@ -98,6 +106,8 @@ private:
 
     void send(Queued query);
     void refuse(Queued query);
+    void reportNotSent(Callback callback, const Endpoint &to);
+    bool canSendNow(qint64 now) const;
     void drain();
     void expire();
     QByteArray nextTransactionId();
@@ -125,6 +135,8 @@ private:
     int m_queuedTotal = 0;
     qint64 m_delayed = 0;
     qint64 m_refused = 0;
+    qint64 m_sendFailures = 0;
+    int m_maxPending = DefaultMaxPending;
     quint16 m_nextId = 0;
     bool m_readOnly = false;
 };

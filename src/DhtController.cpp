@@ -69,9 +69,42 @@ EngineStatistics toStatistics(const dht::EngineStats &s)
     out.queriesRefused = s.queriesRefused;
     out.queriesWaiting = s.queriesWaiting;
     out.repliesShed = s.repliesShed;
+    out.sendFailures = s.sendFailures;
     out.storedInfohashes = s.storedInfohashes;
     out.storedPeers = s.storedPeers;
     out.activeLookups = s.activeLookups;
+    return out;
+}
+
+CrawlStatus toCrawlStatus(const dht::CrawlSnapshot &c)
+{
+    CrawlStatus out;
+    switch (c.phase) {
+    case dht::CrawlSnapshot::Phase::Off: out.phase = QStringLiteral("off"); break;
+    case dht::CrawlSnapshot::Phase::WaitingForNodes: out.phase = QStringLiteral("waiting"); break;
+    case dht::CrawlSnapshot::Phase::Discovering: out.phase = QStringLiteral("discovering"); break;
+    case dht::CrawlSnapshot::Phase::Rechecking: out.phase = QStringLiteral("rechecking"); break;
+    case dht::CrawlSnapshot::Phase::UpToDate: out.phase = QStringLiteral("up to date"); break;
+    }
+    out.known = c.known;
+    out.notAsked = c.notAsked;
+    out.responsive = c.responsive;
+    out.silent = c.silent;
+    out.gone = c.gone;
+    out.unroutable = c.unroutable;
+    out.cap = c.cap;
+    out.evicted = c.evicted;
+    out.memoryBytes = double(c.memoryBytes);
+    out.bytesPerEntry = double(c.bytesPerEntry);
+    out.queries = c.queries;
+    out.answers = c.answers;
+    out.errors = c.errors;
+    out.timeouts = c.timeouts;
+    out.notSent = c.notSent;
+    out.outstanding = c.outstanding;
+    out.waiting = c.waiting;
+    out.batch = c.batch;
+    out.monitoredSeconds = double(c.monitoredMs) / 1000.0;
     return out;
 }
 
@@ -212,6 +245,32 @@ void DhtController::setSendLimit(int bytesPerSecond)
     }
 }
 
+void DhtController::setMonitoring(bool on)
+{
+    // Only while running; the switch snaps back otherwise.
+    if (on == m_monitoring || (on && !m_engine))
+        return;
+    m_monitoring = on;
+    emit monitoringChanged();
+    if (m_engine) {
+        QMetaObject::invokeMethod(m_engine, [engine = m_engine, on] { engine->setMonitoring(on); },
+                                  Qt::QueuedConnection);
+    }
+}
+
+void DhtController::setCatalogCap(int cap)
+{
+    cap = std::clamp(cap, 0, dht::NodeCatalog::MaxCap);
+    if (cap == m_catalogCap)
+        return;
+    m_catalogCap = cap;
+    emit catalogCapChanged();
+    if (m_engine) {
+        QMetaObject::invokeMethod(m_engine, [engine = m_engine, cap] { engine->setCatalogCap(cap); },
+                                  Qt::QueuedConnection);
+    }
+}
+
 void DhtController::setReadOnlyMode(bool enabled)
 {
     if (enabled == m_readOnlyMode)
@@ -318,6 +377,7 @@ void DhtController::startEngine()
     config.bep42 = m_bep42Enabled;
     config.readOnly = m_readOnlyMode;
     config.sendLimit = m_sendLimit;
+    config.catalogCap = m_catalogCap;
     config.nodeIdV4 = *idV4;
     config.nodeIdV6 = idV6;
 
@@ -346,6 +406,10 @@ void DhtController::stopEngine()
 {
     destroyEngine();
     m_running = false;
+    if (m_monitoring) {
+        m_monitoring = false;
+        emit monitoringChanged();
+    }
     resetStatus();
     setNotice(QString(), false);
     emit runningChanged();
@@ -377,6 +441,7 @@ void DhtController::resetStatus()
     m_ipv6 = FamilyStatus{};
     m_portMapping = PortMappingStatus{};
     m_stats = EngineStatistics{};
+    m_crawl = CrawlStatus{};
     m_traffic.clear();
     m_nodes->clear();
     clearDataStore();
@@ -409,7 +474,8 @@ void DhtController::applySnapshot(const dht::EngineSnapshot &snapshot)
     if (!m_trafficClock.isValid())
         m_trafficClock.start();
     const qint64 now = m_trafficClock.elapsed();
-    m_traffic.push_back({now, snapshot.stats.bytesIn, snapshot.stats.bytesOut});
+    const dht::CrawlSnapshot &c = snapshot.crawl;
+    m_traffic.push_back({now, snapshot.stats.bytesIn, snapshot.stats.bytesOut, c.queries, c.answers + c.errors});
     while (m_traffic.size() > 2 && now - m_traffic[1].atMs >= WindowMs)
         m_traffic.pop_front();
     const TrafficSample &oldest = m_traffic.front();
@@ -417,6 +483,13 @@ void DhtController::applySnapshot(const dht::EngineSnapshot &snapshot)
         const double seconds = double(now - oldest.atMs) / 1000.0;
         m_stats.bytesInPerSecond = double(snapshot.stats.bytesIn - oldest.bytesIn) / seconds;
         m_stats.bytesOutPerSecond = double(snapshot.stats.bytesOut - oldest.bytesOut) / seconds;
+    }
+
+    m_crawl = toCrawlStatus(c);
+    if (now - oldest.atMs >= 250) {
+        const double seconds = double(now - oldest.atMs) / 1000.0;
+        m_crawl.queriesPerSecond = double(c.queries - oldest.crawlQueries) / seconds;
+        m_crawl.answersPerSecond = double(c.answers + c.errors - oldest.crawlAnswers) / seconds;
     }
 
     m_nodes->update(snapshot.nodes);

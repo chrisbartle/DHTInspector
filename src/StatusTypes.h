@@ -76,6 +76,7 @@ class EngineStatistics
     Q_PROPERTY(qint64 queriesRefused MEMBER queriesRefused)
     Q_PROPERTY(int queriesWaiting MEMBER queriesWaiting)
     Q_PROPERTY(qint64 repliesShed MEMBER repliesShed)
+    Q_PROPERTY(qint64 sendFailures MEMBER sendFailures)
     Q_PROPERTY(double bytesInPerSecond MEMBER bytesInPerSecond)
     Q_PROPERTY(double bytesOutPerSecond MEMBER bytesOutPerSecond)
     Q_PROPERTY(int storedInfohashes MEMBER storedInfohashes)
@@ -99,12 +100,67 @@ public:
     qint64 queriesRefused = 0;
     int queriesWaiting = 0;
     qint64 repliesShed = 0;
+    qint64 sendFailures = 0;
     // Averaged over the last few seconds of snapshots.
     double bytesInPerSecond = 0;
     double bytesOutPerSecond = 0;
     int storedInfohashes = 0;
     int storedPeers = 0;
     int activeLookups = 0;
+};
+
+// The network scan, for the Global Health tab.
+class CrawlStatus
+{
+    Q_GADGET
+    QML_VALUE_TYPE(crawlStatus)
+    Q_PROPERTY(QString phase MEMBER phase)
+    Q_PROPERTY(int known MEMBER known)
+    Q_PROPERTY(int notAsked MEMBER notAsked)
+    Q_PROPERTY(int responsive MEMBER responsive)
+    Q_PROPERTY(int silent MEMBER silent)
+    Q_PROPERTY(int gone MEMBER gone)
+    Q_PROPERTY(int unroutable MEMBER unroutable)
+    Q_PROPERTY(int cap MEMBER cap)
+    Q_PROPERTY(qint64 evicted MEMBER evicted)
+    Q_PROPERTY(double memoryBytes MEMBER memoryBytes)
+    Q_PROPERTY(double bytesPerEntry MEMBER bytesPerEntry)
+    Q_PROPERTY(qint64 queries MEMBER queries)
+    Q_PROPERTY(qint64 answers MEMBER answers)
+    Q_PROPERTY(qint64 errors MEMBER errors)
+    Q_PROPERTY(qint64 timeouts MEMBER timeouts)
+    Q_PROPERTY(qint64 notSent MEMBER notSent)
+    Q_PROPERTY(int outstanding MEMBER outstanding)
+    Q_PROPERTY(int waiting MEMBER waiting)
+    Q_PROPERTY(int batch MEMBER batch)
+    Q_PROPERTY(double monitoredSeconds MEMBER monitoredSeconds)
+    Q_PROPERTY(double queriesPerSecond MEMBER queriesPerSecond)
+    Q_PROPERTY(double answersPerSecond MEMBER answersPerSecond)
+
+public:
+    // One of: off, waiting, discovering, rechecking, up to date.
+    QString phase = QStringLiteral("off");
+    int known = 0;
+    int notAsked = 0;
+    int responsive = 0;
+    int silent = 0;
+    int gone = 0;
+    int unroutable = 0;
+    int cap = 0;
+    qint64 evicted = 0;
+    double memoryBytes = 0;
+    double bytesPerEntry = 0;
+    qint64 queries = 0;
+    qint64 answers = 0;
+    qint64 errors = 0;
+    qint64 timeouts = 0;
+    qint64 notSent = 0;
+    int outstanding = 0;
+    int waiting = 0;
+    int batch = 0;
+    double monitoredSeconds = 0;
+    double queriesPerSecond = 0;
+    double answersPerSecond = 0;
 };
 
 class ProbeStatus

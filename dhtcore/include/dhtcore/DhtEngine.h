@@ -1,6 +1,8 @@
 #pragma once
 
+#include "dhtcore/Crawler.h"
 #include "dhtcore/DhtNode.h"
+#include "dhtcore/NodeCatalog.h"
 #include "dhtcore/PortMapper.h"
 #include "dhtcore/Snapshot.h"
 #include "dhtcore/Support.h"
@@ -31,6 +33,10 @@ struct EngineConfig
     // Everything we send, both families together, in bytes per second of
     // UDP payload. 0 means unlimited. Adjustable while running.
     qint64 sendLimit = 0;
+    // The network scan: how many nodes it may remember, and its pacing.
+    // Scanning itself starts only when monitoring is switched on.
+    int catalogCap = NodeCatalog::DefaultCap;
+    CrawlConfig crawl;
     bool allowLocalAddresses = false;  // for LAN and loopback testing
     QHostAddress bindAddressV4;        // null: any
     QHostAddress bindAddressV6;        // null: any
@@ -72,6 +78,13 @@ public:
     void setPortForwarding(bool enabled);
     void setReadOnly(bool enabled);
     void setSendLimit(qint64 bytesPerSecond);
+
+    // Monitoring scans the whole network continuously. Turning it off
+    // pauses the scan and keeps what it found; shutdown() discards it.
+    void setMonitoring(bool on);
+    bool isMonitoring() const { return m_crawler && m_crawler->isMonitoring(); }
+    void setCatalogCap(int cap);
+    const NodeCatalog &catalog() const { return m_catalog; }
     qint64 sendLimit() const { return m_budget.limit(); }
 
     void getPeers(const NodeId &infohash, std::function<void(const std::vector<Endpoint> &peers)> done);
@@ -122,6 +135,8 @@ private:
     PeerStorage m_storage;
     ItemStorage m_items;
     SendBudget m_budget;
+    NodeCatalog m_catalog;
+    Crawler *m_crawler = nullptr;
     DhtNode *m_v4 = nullptr;
     DhtNode *m_v6 = nullptr;
     QString m_v6Error;

@@ -56,6 +56,8 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
         return true;
     m_config = config;
     m_budget.setLimit(config.sendLimit, nowMs());
+    m_catalog.clear();
+    m_catalog.setCap(config.catalogCap);
 
     NodeConfig v4;
     v4.family = Family::IPv4;
@@ -94,6 +96,11 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
         }
     }
 
+    CrawlConfig crawl = config.crawl;
+    crawl.allowLocalAddresses = config.allowLocalAddresses;
+    m_crawler = new Crawler(&m_catalog, crawl, this);
+    m_crawler->setNodes(m_v4, m_v6);
+
     m_mapper = new PortMapper(this);
     connect(m_mapper, &PortMapper::changed, this, &DhtEngine::scheduleSnapshot);
     if (config.portForwarding)
@@ -122,6 +129,11 @@ void DhtEngine::shutdown()
         delete m_mapper;
         m_mapper = nullptr;
     }
+    // The crawler goes before the nodes it sends through.
+    delete m_crawler;
+    m_crawler = nullptr;
+    m_catalog.clear();
+
     const auto destroy = [this](DhtNode *&node) {
         if (!node)
             return;
@@ -210,6 +222,25 @@ void DhtEngine::setSendLimit(qint64 bytesPerSecond)
 {
     m_config.sendLimit = bytesPerSecond;
     m_budget.setLimit(bytesPerSecond, nowMs());
+    scheduleSnapshot();
+}
+
+void DhtEngine::setMonitoring(bool on)
+{
+    if (!m_crawler)
+        return;
+    m_crawler->setMonitoring(on);
+    scheduleSnapshot();
+}
+
+void DhtEngine::setCatalogCap(int cap)
+{
+    m_config.catalogCap = cap;
+    m_catalog.setCap(cap);
+    // A running scan trims in batches so replies are not left waiting; a
+    // paused one can do it all now.
+    if (!isMonitoring())
+        m_catalog.trim(NodeCatalog::MaxCap);
     scheduleSnapshot();
 }
 
@@ -607,6 +638,8 @@ EngineSnapshot DhtEngine::snapshot() const
     }
     if (m_mapper)
         s.portMapping = m_mapper->snapshot();
+    if (m_crawler)
+        s.crawl = m_crawler->snapshot();
 
     s.stats.storedInfohashes = m_storage.infohashCount();
     s.stats.storedPeers = m_storage.peerCount();

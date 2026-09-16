@@ -9,6 +9,7 @@ int runTestBep44(int argc, char **argv);
 int runTestClientVersion(int argc, char **argv);
 int runTestEngine(int argc, char **argv);
 int runTestKrpc(int argc, char **argv);
+int runTestNodeCatalog(int argc, char **argv);
 int runTestPortMapper(int argc, char **argv);
 int runTestRoutingTable(int argc, char **argv);
 int runTestRpcManager(int argc, char **argv);
@@ -47,6 +48,7 @@ int main(int argc, char **argv)
     failures += runSuite(runTestBep44, "TestBep44", argc, argv);
     failures += runSuite(runTestClientVersion, "TestClientVersion", argc, argv);
     failures += runSuite(runTestKrpc, "TestKrpc", argc, argv);
+    failures += runSuite(runTestNodeCatalog, "TestNodeCatalog", argc, argv);
     failures += runSuite(runTestSupport, "TestSupport", argc, argv);
     failures += runSuite(runTestRoutingTable, "TestRoutingTable", argc, argv);
     failures += runSuite(runTestRpcManager, "TestRpcManager", argc, argv);

@@ -81,6 +81,7 @@ struct EngineStats
     qint64 queriesRefused = 0;   // our queries never sent: too many already waiting
     int queriesWaiting = 0;      // waiting right now
     qint64 repliesShed = 0;      // queries left unanswered because of the send limit
+    qint64 sendFailures = 0;     // datagrams the OS would not take (buffer full)
     int storedInfohashes = 0;
     int storedPeers = 0;
     int activeLookups = 0;
@@ -103,8 +104,44 @@ struct EngineStats
         queriesRefused += o.queriesRefused;
         queriesWaiting += o.queriesWaiting;
         repliesShed += o.repliesShed;
+        sendFailures += o.sendFailures;
         activeLookups += o.activeLookups;
     }
+};
+
+// The network scan: where it is and what the catalogue holds.
+struct CrawlSnapshot
+{
+    enum class Phase {
+        Off,
+        WaitingForNodes,  // monitoring, but nothing to start from yet
+        Discovering,      // asking nodes not asked before
+        Rechecking,       // everything known has been asked; going round again
+        UpToDate,         // nothing due right now
+    };
+
+    Phase phase = Phase::Off;
+    int known = 0;
+    int notAsked = 0;     // not answered yet, and not yet given up on
+    int responsive = 0;
+    int silent = 0;
+    int gone = 0;
+    int unroutable = 0;
+
+    int cap = 0;
+    qint64 evicted = 0;
+    qint64 memoryBytes = 0;
+    qint64 bytesPerEntry = 0;
+
+    qint64 queries = 0;
+    qint64 answers = 0;   // responses
+    qint64 errors = 0;    // error replies, which still show the node is alive
+    qint64 timeouts = 0;
+    qint64 notSent = 0;   // held back by limits or refused by the OS
+    int outstanding = 0;  // asked, not yet answered or timed out
+    int waiting = 0;      // queued to be asked
+    int batch = 0;        // queries per tick the crawler currently allows itself
+    qint64 monitoredMs = 0;
 };
 
 struct EngineSnapshot
@@ -115,6 +152,7 @@ struct EngineSnapshot
     PortMappingSnapshot portMapping;
     EngineStats stats;
     std::vector<NodeRow> nodes;
+    CrawlSnapshot crawl;
 };
 
 // --- data store -------------------------------------------------------------

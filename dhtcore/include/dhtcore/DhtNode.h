@@ -81,7 +81,7 @@ public:
 
     // Sends one query to one endpoint and reports the whole exchange.
     void probe(const Endpoint &endpoint, const QByteArray &method, BValue::Dict arguments,
-               std::function<void(const RpcReply &reply)> done);
+               std::function<void(const RpcReply &reply)> done, int timeoutMs = RpcManager::DefaultTimeoutMs);
 
     void findNode(const NodeId &target, Lookup::DoneFn done);
     void getPeers(const NodeId &infohash, Lookup::DoneFn done);
@@ -91,6 +91,12 @@ public:
                   std::function<void(int accepted)> done);
 
     std::vector<krpc::CompactNode> closestNodes(const NodeId &target, int count) const;
+
+    // How much is waiting in the RPC layer, for callers that pace themselves.
+    int rpcQueued() const { return m_rpc ? m_rpc->queuedCount() : 0; }
+    int rpcPending() const { return m_rpc ? m_rpc->pendingCount() : 0; }
+    int rpcQueuedFor(const QHostAddress &address) const { return m_rpc ? m_rpc->queuedFor(address) : 0; }
+    qint64 rpcSendFailures() const { return m_rpc ? m_rpc->sendFailures() : 0; }
 
     FamilySnapshot familySnapshot() const;
     void appendNodeRows(std::vector<NodeRow> &rows, qint64 now) const;
@@ -123,9 +129,9 @@ private:
     void handlePut(const krpc::Message &message, const Endpoint &from, const QByteArray &datagram, qint64 now);
     void handleGet(const krpc::Message &message, const Endpoint &from, qint64 now);
 
-    void sendDatagram(const QByteArray &data, const Endpoint &to);
+    bool sendDatagram(const QByteArray &data, const Endpoint &to);
     void sendQuery(const Endpoint &to, const QByteArray &method, BValue::Dict arguments,
-                   RpcManager::Callback callback);
+                   RpcManager::Callback callback, int timeoutMs = RpcManager::DefaultTimeoutMs);
     void sendResponse(const krpc::Message &query, const Endpoint &to, BValue::Dict values);
     void sendError(const QByteArray &transactionId, const Endpoint &to, int code, const QByteArray &message);
     bool budgetAllowsReply();

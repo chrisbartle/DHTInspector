@@ -6,6 +6,7 @@
 #include "NodeListModel.h"
 #include "StatusTypes.h"
 
+#include "dhtcore/NodeCatalog.h"
 #include "dhtcore/Snapshot.h"
 
 #include <QElapsedTimer>
@@ -40,6 +41,9 @@ class DhtController : public QObject
     Q_PROPERTY(bool bep42Enabled READ bep42Enabled WRITE setBep42Enabled NOTIFY bep42EnabledChanged)
     Q_PROPERTY(bool readOnlyMode READ readOnlyMode WRITE setReadOnlyMode NOTIFY readOnlyModeChanged)
     Q_PROPERTY(int sendLimit READ sendLimit WRITE setSendLimit NOTIFY sendLimitChanged)
+    Q_PROPERTY(bool monitoring READ monitoring WRITE setMonitoring NOTIFY monitoringChanged)
+    Q_PROPERTY(int catalogCap READ catalogCap WRITE setCatalogCap NOTIFY catalogCapChanged)
+    Q_PROPERTY(CrawlStatus crawl READ crawl NOTIFY snapshotChanged)
     Q_PROPERTY(QString nodeIdV4 READ nodeIdV4 WRITE setNodeIdV4 NOTIFY nodeIdV4Changed)
     Q_PROPERTY(QString nodeIdV6 READ nodeIdV6 WRITE setNodeIdV6 NOTIFY nodeIdV6Changed)
 
@@ -96,6 +100,14 @@ public:
     // once, whether or not the engine is running.
     int sendLimit() const { return m_sendLimit; }
     void setSendLimit(int bytesPerSecond);
+
+    // Global Health. Monitoring needs a running engine; switching it off
+    // pauses the scan, stopping the engine discards what it found.
+    bool monitoring() const { return m_monitoring; }
+    void setMonitoring(bool on);
+    int catalogCap() const { return m_catalogCap; }
+    void setCatalogCap(int cap);
+    CrawlStatus crawl() const { return m_crawl; }
 
     // Node IDs as typed, normally 40 hex digits. Editable while stopped;
     // while running they follow the engine, which may replace them (BEP 42).
@@ -180,6 +192,8 @@ signals:
     void bep42EnabledChanged();
     void readOnlyModeChanged();
     void sendLimitChanged();
+    void monitoringChanged();
+    void catalogCapChanged();
     void nodeIdV4Changed();
     void nodeIdV6Changed();
     void snapshotChanged();
@@ -221,6 +235,9 @@ private:
     bool m_bep42Enabled = true;
     bool m_readOnlyMode = false;
     int m_sendLimit = 0;
+    bool m_monitoring = false;
+    int m_catalogCap = dht::NodeCatalog::DefaultCap;
+    CrawlStatus m_crawl;
 
     // Recent byte totals, for the transfer rates.
     struct TrafficSample
@@ -228,6 +245,8 @@ private:
         qint64 atMs;
         qint64 bytesIn;
         qint64 bytesOut;
+        qint64 crawlQueries;
+        qint64 crawlAnswers;
     };
     std::deque<TrafficSample> m_traffic;
     QElapsedTimer m_trafficClock;

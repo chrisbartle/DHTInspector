@@ -20,7 +20,7 @@ Two jobs, one tool:
 | Setup tab | Working |
 | Search tab | Working: peer and item lookups, announce, BEP 44 publishing |
 | Data Store tab | Working: announced peers with addresses and expiry |
-| Global Health tab | Layout only |
+| Global Health tab | In progress: network scan (Monitoring) with node counts; statistics and node list to come |
 | Probe Node tab | Working: one node, any query, replies decoded in full |
 
 ### What the engine does
@@ -50,6 +50,16 @@ Two jobs, one tool:
   none is starved, and incoming queries are dropped unanswered before they
   change anything, as libtorrent does. Current send and receive rates are on
   the status bar.
+- Network scan (Global Health tab, Monitoring switch, off by default): asks
+  every node it hears of for its neighbours, gives a silent node a second
+  try, then keeps rechecking what it knows, longest-unchecked first. It runs
+  as fast as the limits above and this machine allow, backing off when the
+  engine falls behind or the OS refuses datagrams (a refused send is never
+  recorded as a silent node), and never lets more than two of its queries
+  wait behind one IP address. Nodes are kept in a compact catalogue, 80
+  bytes each, capped at 2 million by default (adjustable while running);
+  when full, a sampled choice of the longest-silent nodes makes way.
+  Switching monitoring off pauses the scan; stopping the engine discards it.
 - BEP 43 read-only mode, off by default and switchable while running: every
   query we send carries `ro`, and every query we receive is dropped without a
   reply, so the store gains nothing while it is on. Our own lookups still work.

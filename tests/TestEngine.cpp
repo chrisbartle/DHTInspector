@@ -13,6 +13,7 @@
 #include <QUdpSocket>
 
 #include <algorithm>
+#include <set>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -93,6 +94,37 @@ std::optional<krpc::Message> waitForQuery(QUdpSocket &socket, int timeoutMs)
     return std::nullopt;
 }
 
+// A quick scan for loopback tests: short timeouts and revisit intervals.
+EngineConfig monitorConfig()
+{
+    EngineConfig config = loopbackConfig();
+    config.crawl.queryTimeoutMs = 400;
+    config.crawl.retryDelayMs = 200;
+    config.crawl.revisitIntervalMs = 800;
+    config.crawl.silentRevisitIntervalMs = 800;
+    return config;
+}
+
+// A chain of engines, each introduced only to the one before it, so a
+// scan has to follow replies to find them all.
+std::vector<std::unique_ptr<DhtEngine>> startChain(int count)
+{
+    std::vector<std::unique_ptr<DhtEngine>> chain;
+    for (int i = 0; i < count; ++i) {
+        chain.push_back(startEngine());
+        if (!chain.back())
+            return {};
+        if (i > 0)
+            chain.back()->addNode(QStringLiteral("127.0.0.1"), portOf(*chain[i - 1]));
+    }
+    return chain;
+}
+
+int catalogCount(const DhtEngine &engine, CatalogEntry::State state)
+{
+    return engine.catalog().count(state);
+}
+
 BValue::Dict withId(const NodeId &id, BValue::Dict args = {})
 {
     args.insert_or_assign("id", BValue(id.toBytes()));
@@ -130,6 +162,10 @@ private slots:
     void readOnlyModeAnswersNothing();
     void neverOverwhelmsOneHost();
     void sendLimitShedsRepliesAndCanBeLifted();
+    void monitoringDiscoversTheWholeSwarm();
+    void monitoringMarksSilentAndGoneNodes();
+    void monitoringPausesAndHonoursTheCap();
+    void monitoringDoesNotQueueBehindABusyHost();
 };
 
 void TestEngine::swarmConvergesAndSharesPeers()
@@ -1068,6 +1104,218 @@ void TestEngine::sendLimitShedsRepliesAndCanBeLifted()
     const auto [freeReplies, freeBytes] = collectReplies("b", 800);
     Q_UNUSED(freeBytes);
     QCOMPARE(freeReplies, 10);
+}
+
+void TestEngine::monitoringDiscoversTheWholeSwarm()
+{
+    constexpr int N = 12;
+    auto chain = startChain(N);
+    QCOMPARE(int(chain.size()), N);
+
+    auto monitor = startEngineWith(monitorConfig());
+    QVERIFY(monitor);
+    monitor->addNode(QStringLiteral("127.0.0.1"), portOf(*chain.back()));
+    QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*monitor) >= 1, 5000);
+
+    QCOMPARE(monitor->snapshot().crawl.phase, CrawlSnapshot::Phase::Off);
+    monitor->setMonitoring(true);
+    QVERIFY(monitor->isMonitoring());
+    QTRY_COMPARE_WITH_TIMEOUT(catalogCount(*monitor, CatalogEntry::State::Responsive), N, 20000);
+
+    // Each of them, with what it said about itself, and never ourselves.
+    std::set<quint16> ports;
+    const NodeId self = monitor->node(Family::IPv4)->id();
+    monitor->catalog().forEach([&](NodeCatalog::Slot, const CatalogEntry &e) {
+        QVERIFY(e.id != self);
+        if (e.state != CatalogEntry::State::Responsive)
+            return;
+        ports.insert(e.port);
+        QCOMPARE(e.versionBytes(), clientVersion());
+        QVERIFY(e.rttMs != CatalogEntry::NoRtt);
+        QCOMPARE(bep42::Status(e.bep42), bep42::Status::Exempt);  // loopback
+        QVERIFY(e.lastAnswered > 0 && e.answeringSince > 0);
+    });
+    for (const auto &engine : chain)
+        QCOMPARE(int(ports.count(portOf(*engine))), 1);
+
+    const CrawlSnapshot crawl = monitor->snapshot().crawl;
+    QCOMPARE(crawl.responsive, N);
+    QVERIFY(crawl.queries >= N);
+    QVERIFY(crawl.answers >= N);
+    QCOMPARE(crawl.notSent, qint64(0));
+    QVERIFY(crawl.phase != CrawlSnapshot::Phase::Off);
+    QVERIFY(crawl.memoryBytes > 0);
+}
+
+void TestEngine::monitoringMarksSilentAndGoneNodes()
+{
+    constexpr int N = 5;
+    auto chain = startChain(N);
+    QCOMPARE(int(chain.size()), N);
+
+    // A socket that never answers, and a node that lists it.
+    QUdpSocket dead;
+    QVERIFY(dead.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const Endpoint deadEndpoint(QHostAddress(QHostAddress::LocalHost), dead.localPort());
+
+    QUdpSocket lister;
+    QVERIFY(lister.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const NodeId listerId = NodeId::random();
+    connect(&lister, &QUdpSocket::readyRead, this, [&] {
+        while (lister.hasPendingDatagrams()) {
+            const QNetworkDatagram d = lister.receiveDatagram();
+            const auto parsed = krpc::parse(d.data());
+            if (!parsed.message || parsed.message->type != krpc::MessageType::Query)
+                continue;
+            BValue::Dict values;
+            values.emplace("id", BValue(listerId.toBytes()));
+            values.emplace("nodes", BValue(krpc::encodeNodes({{NodeId::random(), deadEndpoint}}, Family::IPv4)));
+            lister.writeDatagram(krpc::encodeResponse(parsed.message->transactionId, values, {}, Endpoint()),
+                                 d.senderAddress(), quint16(d.senderPort()));
+        }
+    });
+
+    auto monitor = startEngineWith(monitorConfig());
+    QVERIFY(monitor);
+    monitor->addNode(QStringLiteral("127.0.0.1"), portOf(*chain.back()));
+    monitor->addNode(QStringLiteral("127.0.0.1"), lister.localPort());
+    QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*monitor) >= 2, 5000);
+
+    monitor->setMonitoring(true);
+    QTRY_COMPARE_WITH_TIMEOUT(catalogCount(*monitor, CatalogEntry::State::Responsive), N + 1, 20000);
+    QTRY_COMPARE_WITH_TIMEOUT(catalogCount(*monitor, CatalogEntry::State::Silent), 1, 10000);
+    const auto deadSlot = monitor->catalog().find(deadEndpoint);
+    QVERIFY(deadSlot != NodeCatalog::NoSlot);
+    QCOMPARE(monitor->catalog().at(deadSlot).state, CatalogEntry::State::Silent);
+    QVERIFY(monitor->catalog().at(deadSlot).failures >= 2);
+    QCOMPARE(monitor->catalog().at(deadSlot).lastAnswered, quint32(0));
+
+    // Two nodes stop. Once rechecked without an answer they are gone rather
+    // than silent, because they answered before.
+    const quint16 stoppedA = portOf(*chain[1]);
+    const quint16 stoppedB = portOf(*chain[3]);
+    chain[1].reset();
+    chain[3].reset();
+    QTRY_COMPARE_WITH_TIMEOUT(catalogCount(*monitor, CatalogEntry::State::Gone), 2, 15000);
+    for (quint16 port : {stoppedA, stoppedB}) {
+        const auto slot = monitor->catalog().find(Endpoint(QHostAddress(QHostAddress::LocalHost), port));
+        QVERIFY(slot != NodeCatalog::NoSlot);
+        QCOMPARE(monitor->catalog().at(slot).state, CatalogEntry::State::Gone);
+    }
+    QCOMPARE(catalogCount(*monitor, CatalogEntry::State::Responsive), N + 1 - 2);
+    QVERIFY(monitor->snapshot().crawl.timeouts >= 6);
+}
+
+void TestEngine::monitoringPausesAndHonoursTheCap()
+{
+    constexpr int N = 10;
+    auto chain = startChain(N);
+    QCOMPARE(int(chain.size()), N);
+
+    EngineConfig config = monitorConfig();
+    config.catalogCap = 4;
+    auto monitor = startEngineWith(config);
+    QVERIFY(monitor);
+    monitor->addNode(QStringLiteral("127.0.0.1"), portOf(*chain.back()));
+    QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*monitor) >= 1, 5000);
+
+    // Never more than the cap, however much it hears of.
+    monitor->setMonitoring(true);
+    QDeadlineTimer watch(4000);
+    while (!watch.hasExpired()) {
+        QVERIFY2(monitor->catalog().size() <= 4, qPrintable(QString::number(monitor->catalog().size())));
+        QTest::qWait(50);
+    }
+    QVERIFY(monitor->catalog().evicted() > 0);
+
+    // Paused: no new queries, and what it knows stays.
+    monitor->setMonitoring(false);
+    QCOMPARE(monitor->snapshot().crawl.phase, CrawlSnapshot::Phase::Off);
+    QTest::qWait(1000);  // let anything already sent come back
+    const qint64 queries = monitor->snapshot().crawl.queries;
+    const int known = monitor->catalog().size();
+    QVERIFY(known > 0);
+    QTest::qWait(1500);
+    QCOMPARE(monitor->snapshot().crawl.queries, queries);
+    QCOMPARE(monitor->catalog().size(), known);
+
+    // Lowering the cap while paused trims at once.
+    monitor->setCatalogCap(2);
+    QCOMPARE(monitor->catalog().size(), 2);
+
+    // Resuming picks up where it left off; shutting down discards it all.
+    monitor->setMonitoring(true);
+    QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.queries > queries, 5000);
+    monitor->shutdown();
+    QCOMPARE(monitor->catalog().size(), 0);
+    QVERIFY(!monitor->isMonitoring());
+}
+
+// One address, many ports: the scan asks them all, but never lets more
+// than a couple of queries wait behind that address, and pausing stops the
+// traffic promptly.
+void TestEngine::monitoringDoesNotQueueBehindABusyHost()
+{
+    constexpr int Ports = 30;
+    std::vector<std::unique_ptr<QUdpSocket>> nodes;
+    std::vector<NodeId> ids;
+    for (int i = 0; i < Ports; ++i) {
+        nodes.push_back(std::make_unique<QUdpSocket>());
+        QVERIFY(nodes.back()->bind(QHostAddress(QHostAddress::LocalHost), 0));
+        ids.push_back(NodeId::random());
+    }
+    // Every one of them answers, listing all the others.
+    std::vector<krpc::CompactNode> all;
+    for (int i = 0; i < Ports; ++i)
+        all.push_back({ids[i], Endpoint(QHostAddress(QHostAddress::LocalHost), nodes[i]->localPort())});
+    int answered = 0;
+    for (int i = 0; i < Ports; ++i) {
+        QUdpSocket *socket = nodes[i].get();
+        const NodeId id = ids[i];
+        connect(socket, &QUdpSocket::readyRead, this, [&, socket, id] {
+            while (socket->hasPendingDatagrams()) {
+                const QNetworkDatagram d = socket->receiveDatagram();
+                const auto parsed = krpc::parse(d.data());
+                if (!parsed.message || parsed.message->type != krpc::MessageType::Query)
+                    continue;
+                ++answered;
+                BValue::Dict values;
+                values.emplace("id", BValue(id.toBytes()));
+                values.emplace("nodes", BValue(krpc::encodeNodes(all, Family::IPv4)));
+                socket->writeDatagram(krpc::encodeResponse(parsed.message->transactionId, values, {}, Endpoint()),
+                                      d.senderAddress(), quint16(d.senderPort()));
+            }
+        });
+    }
+
+    // The real per-host limit this time: two a second for the one address.
+    EngineConfig config = monitorConfig();
+    config.hostLimit = HostLimit{};
+    auto monitor = startEngineWith(config);
+    QVERIFY(monitor);
+    monitor->addNode(QStringLiteral("127.0.0.1"), nodes[0]->localPort());
+    QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*monitor) >= 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(monitor->node(Family::IPv4)->stats().activeLookups, 0, 60000);
+
+    monitor->setMonitoring(true);
+    QDeadlineTimer watch(6000);
+    int mostQueued = 0;
+    while (!watch.hasExpired()) {
+        mostQueued = std::max(mostQueued, monitor->node(Family::IPv4)->rpcQueued());
+        QTest::qWait(20);
+    }
+    // The crawler's own share stays at MaxQueuedPerHost; an ordinary lookup
+    // may add its three. Without the limit this reaches the dozens.
+    QVERIFY2(mostQueued <= Crawler::MaxQueuedPerHost + Lookup::Alpha, qPrintable(QString::number(mostQueued)));
+    QVERIFY(catalogCount(*monitor, CatalogEntry::State::Responsive) >= 8);  // about two a second
+    QCOMPARE(monitor->snapshot().crawl.notSent, qint64(0));
+    QVERIFY(answered > 0);
+
+    // Paused: little is left waiting, so traffic stops promptly.
+    monitor->setMonitoring(false);
+    QTest::qWait(1200);
+    QVERIFY2(monitor->node(Family::IPv4)->rpcQueued() <= Lookup::Alpha,
+             qPrintable(QString::number(monitor->node(Family::IPv4)->rpcQueued())));
 }
 
 #include "TestEngine.moc"

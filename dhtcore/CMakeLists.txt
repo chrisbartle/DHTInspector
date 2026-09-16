@@ -3,6 +3,7 @@ qt_add_library(dhtcore STATIC
     include/dhtcore/Bep42.h         src/Bep42.cpp
     include/dhtcore/Bep44.h         src/Bep44.cpp
     include/dhtcore/ClientVersion.h src/ClientVersion.cpp
+    include/dhtcore/Crawler.h       src/Crawler.cpp
     include/dhtcore/Crc32c.h        src/Crc32c.cpp
     include/dhtcore/DhtEngine.h     src/DhtEngine.cpp
     include/dhtcore/DhtNode.h       src/DhtNode.cpp
@@ -10,6 +11,7 @@ qt_add_library(dhtcore STATIC
     include/dhtcore/Gateway.h       src/Gateway.cpp
     include/dhtcore/Krpc.h          src/Krpc.cpp
     include/dhtcore/Lookup.h        src/Lookup.cpp
+    include/dhtcore/NodeCatalog.h   src/NodeCatalog.cpp
     include/dhtcore/NodeId.h        src/NodeId.cpp
     include/dhtcore/PortMapper.h    src/PortMapper.cpp
     include/dhtcore/RoutingTable.h  src/RoutingTable.cpp

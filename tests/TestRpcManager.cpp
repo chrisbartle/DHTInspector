@@ -30,7 +30,10 @@ struct Recorder
 
     RpcManager::SendFn sendFn()
     {
-        return [this](const QByteArray &d, const Endpoint &to) { sent.push_back({d, to, clock.elapsed()}); };
+        return [this](const QByteArray &d, const Endpoint &to) {
+            sent.push_back({d, to, clock.elapsed()});
+            return true;
+        };
     }
 
     int countTo(const QHostAddress &address) const
@@ -61,6 +64,8 @@ private slots:
     void defaultStaysUnderTheBanThreshold();
     void sharesATightBudgetAcrossHosts();
     void liftingTheBudgetReleasesTheQueue();
+    void failedSendIsNotATimeout();
+    void pendingCapHoldsQueriesBack();
 
 private:
     const QHostAddress hostA{QStringLiteral("127.0.0.1")};
@@ -270,6 +275,7 @@ void TestRpcManager::sharesATightBudgetAcrossHosts()
     RpcManager rpc([&](const QByteArray &d, const Endpoint &to) {
         rec.sent.push_back({d, to, rec.clock.elapsed()});
         budget.spend(d.size(), nowMs());  // what DhtNode does when it sends
+        return true;
     });
     rpc.setHostLimit({1000.0, 1000.0, 64});  // only the budget matters here
     rpc.setBudget(&budget);
@@ -322,6 +328,7 @@ void TestRpcManager::liftingTheBudgetReleasesTheQueue()
     RpcManager rpc([&](const QByteArray &d, const Endpoint &to) {
         rec.sent.push_back({d, to, rec.clock.elapsed()});
         budget.spend(d.size(), nowMs());
+        return true;
     });
     rpc.setHostLimit({1000.0, 1000.0, 64});
     rpc.setBudget(&budget);
@@ -336,6 +343,53 @@ void TestRpcManager::liftingTheBudgetReleasesTheQueue()
     budget.setLimit(0, nowMs());
     QTRY_COMPARE_WITH_TIMEOUT(int(rec.sent.size()), 20, 2000);
     QVERIFY2(rec.sent.back().atMs - liftedAt < 500, qPrintable(QString::number(rec.sent.back().atMs - liftedAt)));
+}
+
+void TestRpcManager::failedSendIsNotATimeout()
+{
+    bool accept = false;
+    int attempts = 0;
+    RpcManager rpc([&](const QByteArray &, const Endpoint &) {
+        ++attempts;
+        return accept;
+    });
+
+    std::optional<RpcReply> reply;
+    rpc.query(Endpoint(hostA, 1000), "q", {}, {}, [&](const RpcReply &r) { reply = r; }, 200);
+    QCOMPARE(attempts, 1);
+    QVERIFY(!reply);  // reported later, not from inside query()
+    QCOMPARE(rpc.pendingCount(), 0);
+    QTRY_VERIFY_WITH_TIMEOUT(reply.has_value(), 1000);
+    QCOMPARE(reply->status, RpcReply::Status::Throttled);
+    QCOMPARE(rpc.sendFailures(), qint64(1));
+
+    // Nothing is left behind to time out later.
+    QTest::qWait(400);
+    QCOMPARE(reply->status, RpcReply::Status::Throttled);
+
+    accept = true;
+    reply.reset();
+    rpc.query(Endpoint(hostB, 1000), "q", {}, {}, [&](const RpcReply &r) { reply = r; }, 200);
+    QTRY_VERIFY_WITH_TIMEOUT(reply.has_value(), 1000);
+    QCOMPARE(reply->status, RpcReply::Status::Timeout);
+}
+
+void TestRpcManager::pendingCapHoldsQueriesBack()
+{
+    Recorder rec;
+    RpcManager rpc(rec.sendFn());
+    rpc.setHostLimit({1000.0, 1000.0, 64});
+    rpc.setMaxPending(3);
+
+    for (int h = 0; h < 5; ++h)
+        rpc.query(Endpoint(hostNumber(h), 1000), "q", {}, {}, nullptr, 300);
+    QCOMPARE(int(rec.sent.size()), 3);
+    QCOMPARE(rpc.pendingCount(), 3);
+    QCOMPARE(rpc.queuedCount(), 2);
+
+    // As the first ones time out, the waiting ones go.
+    QTRY_COMPARE_WITH_TIMEOUT(int(rec.sent.size()), 5, 2000);
+    QCOMPARE(rpc.refusedCount(), qint64(0));
 }
 
 int runTestRpcManager(int argc, char **argv)

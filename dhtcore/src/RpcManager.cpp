@@ -56,8 +56,7 @@ void RpcManager::query(const Endpoint &to, const QByteArray &method, BValue::Dic
     // Anything already waiting for this host goes first, so order is kept,
     // and nothing jumps ahead of hosts that are waiting for the budget.
     auto queue = m_queues.find(to.address);
-    if (queue == m_queues.end() && !m_budgetExhausted && (!m_budget || m_budget->available(now))
-        && m_limiter.allow(to.address, now)) {
+    if (queue == m_queues.end() && !m_budgetExhausted && canSendNow(now) && m_limiter.allow(to.address, now)) {
         send(std::move(q));
         return;
     }
@@ -81,27 +80,52 @@ void RpcManager::query(const Endpoint &to, const QByteArray &method, BValue::Dic
         m_drainTimer.start();
 }
 
+int RpcManager::queuedFor(const QHostAddress &address) const
+{
+    const auto it = m_queues.constFind(address);
+    return it == m_queues.cend() ? 0 : int(it->size());
+}
+
+bool RpcManager::canSendNow(qint64 now) const
+{
+    return int(m_pending.size()) < m_maxPending && (!m_budget || m_budget->available(now));
+}
+
 void RpcManager::send(Queued q)
 {
     const QByteArray tid = nextTransactionId();
     const qint64 now = nowMs();
     const QByteArray datagram = krpc::encodeQuery(tid, q.method, std::move(q.arguments), q.version, m_readOnly);
     m_pending.insert(tid, Pending{q.to, datagram, now, now + q.timeoutMs, std::move(q.callback)});
-    m_send(datagram, q.to);
+    if (m_send(datagram, q.to))
+        return;
+
+    // Never left the machine (typically a full socket buffer): waiting for
+    // the timeout would record a healthy node as silent.
+    ++m_sendFailures;
+    const auto it = m_pending.find(tid);
+    Callback callback = std::move(it->callback);
+    m_pending.erase(it);
+    reportNotSent(std::move(callback), q.to);
 }
 
 void RpcManager::refuse(Queued q)
 {
     ++m_refused;
-    if (!q.callback)
+    reportNotSent(std::move(q.callback), q.to);
+}
+
+void RpcManager::reportNotSent(Callback callback, const Endpoint &to)
+{
+    if (!callback)
         return;
     // Reported later, so callers never see their callback run from inside
     // their own query() call.
     RpcReply reply;
     reply.status = RpcReply::Status::Throttled;
-    reply.from = q.to;
+    reply.from = to;
     QMetaObject::invokeMethod(
-        this, [callback = std::move(q.callback), reply] { callback(reply); }, Qt::QueuedConnection);
+        this, [callback = std::move(callback), reply] { callback(reply); }, Qt::QueuedConnection);
 }
 
 void RpcManager::drain()
@@ -114,7 +138,7 @@ void RpcManager::drain()
     bool exhausted = false;
     const size_t hosts = m_order.size();
     for (size_t i = 0; i < hosts && !m_order.empty(); ++i) {
-        if (m_budget && !m_budget->available(now)) {
+        if (!canSendNow(now)) {
             exhausted = true;
             break;
         }

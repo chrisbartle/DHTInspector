@@ -67,10 +67,14 @@ bool DhtNode::bind(QString *error)
         m_socket = nullptr;
         return false;
     }
-    m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, QVariant(1 << 20));
+    // Large buffers, so a fast scan is limited by the network rather than by
+    // datagrams dropped on this machine.
+    m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, QVariant(8 << 20));
+    m_socket->setSocketOption(QAbstractSocket::SendBufferSizeSocketOption, QVariant(4 << 20));
     connect(m_socket, &QUdpSocket::readyRead, this, &DhtNode::onReadyRead);
 
-    m_rpc = new RpcManager([this](const QByteArray &data, const Endpoint &to) { sendDatagram(data, to); }, this);
+    m_rpc = new RpcManager([this](const QByteArray &data, const Endpoint &to) { return sendDatagram(data, to); },
+                           this);
     m_rpc->setReadOnly(m_config.readOnly);
     m_rpc->setHostLimit(m_config.hostLimit);
     m_rpc->setBudget(m_budget);
@@ -113,20 +117,21 @@ void DhtNode::setId(const NodeId &id)
 
 // --- Outgoing ---------------------------------------------------------------
 
-void DhtNode::sendDatagram(const QByteArray &data, const Endpoint &to)
+bool DhtNode::sendDatagram(const QByteArray &data, const Endpoint &to)
 {
     if (!m_socket || m_socket->state() != QAbstractSocket::BoundState)
-        return;
-    if (m_socket->writeDatagram(data, to.address, to.port) >= 0) {
-        ++m_stats.packetsOut;
-        m_stats.bytesOut += data.size();
-        if (m_budget)
-            m_budget->spend(data.size(), nowMs());
-    }
+        return false;
+    if (m_socket->writeDatagram(data, to.address, to.port) < 0)
+        return false;
+    ++m_stats.packetsOut;
+    m_stats.bytesOut += data.size();
+    if (m_budget)
+        m_budget->spend(data.size(), nowMs());
+    return true;
 }
 
 void DhtNode::sendQuery(const Endpoint &to, const QByteArray &method, BValue::Dict arguments,
-                        RpcManager::Callback callback)
+                        RpcManager::Callback callback, int timeoutMs)
 {
     if (!m_rpc)
         return;
@@ -140,7 +145,8 @@ void DhtNode::sendQuery(const Endpoint &to, const QByteArray &method, BValue::Di
                      self->onRpcReply(reply);
                      if (callback)
                          callback(reply);
-                 });
+                 },
+                 timeoutMs);
 }
 
 bool DhtNode::budgetAllowsReply()
@@ -610,9 +616,9 @@ Lookup *DhtNode::startLookup(Lookup::Kind kind, const NodeId &target, Lookup::Do
 }
 
 void DhtNode::probe(const Endpoint &endpoint, const QByteArray &method, BValue::Dict arguments,
-                    std::function<void(const RpcReply &)> done)
+                    std::function<void(const RpcReply &)> done, int timeoutMs)
 {
-    sendQuery(endpoint, method, std::move(arguments), std::move(done));
+    sendQuery(endpoint, method, std::move(arguments), std::move(done), timeoutMs);
 }
 
 void DhtNode::findNode(const NodeId &target, Lookup::DoneFn done)
@@ -812,6 +818,7 @@ EngineStats DhtNode::stats() const
         s.queriesDelayed = m_rpc->delayedCount();
         s.queriesRefused = m_rpc->refusedCount();
         s.queriesWaiting = m_rpc->queuedCount();
+        s.sendFailures = m_rpc->sendFailures();
     }
     s.activeLookups = 0;
     for (const QPointer<Lookup> &lookup : m_lookups) {
