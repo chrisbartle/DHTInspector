@@ -62,6 +62,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
     v4.port = config.port;
     v4.allowLocalAddresses = config.allowLocalAddresses;
     v4.bep42 = config.bep42;
+    v4.readOnly = config.readOnly;
     v4.nodeId = config.nodeIdV4;
     v4.version = clientVersion();
 
@@ -201,6 +202,16 @@ void DhtEngine::bootstrap()
                 emit self->notice(QStringLiteral("Could not resolve bootstrap router %1").arg(router.host), true);
         });
     }
+}
+
+void DhtEngine::setReadOnly(bool enabled)
+{
+    m_config.readOnly = enabled;
+    if (m_v4)
+        m_v4->setReadOnly(enabled);
+    if (m_v6)
+        m_v6->setReadOnly(enabled);
+    scheduleSnapshot();
 }
 
 void DhtEngine::setPortForwarding(bool enabled)

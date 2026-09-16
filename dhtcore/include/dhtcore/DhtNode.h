@@ -25,6 +25,7 @@ struct NodeConfig
     quint16 port = 0;                  // 0: let the OS choose
     bool allowLocalAddresses = false;  // accept private/loopback endpoints from the network
     bool bep42 = true;                 // derived node IDs and "ip" in replies
+    bool readOnly = false;             // BEP 43: query others, answer nobody
     std::optional<NodeId> nodeId;      // random when unset
     QByteArray version;                // KRPC "v" field
 };
@@ -48,6 +49,11 @@ public:
     quint16 port() const;
     const NodeId &id() const { return m_id; }
     QHostAddress externalAddress() const { return m_voter.consensus(); }
+
+    // BEP 43. Safe to change while running: it only affects how incoming
+    // queries are treated and whether outgoing ones carry "ro".
+    bool isReadOnly() const { return m_config.readOnly; }
+    void setReadOnly(bool readOnly);
 
     // The node for the other family, used to answer BEP 32 "want" requests.
     void setSibling(DhtNode *sibling) { m_sibling = sibling; }

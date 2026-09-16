@@ -69,6 +69,7 @@ bool DhtNode::bind(QString *error)
     connect(m_socket, &QUdpSocket::readyRead, this, &DhtNode::onReadyRead);
 
     m_rpc = new RpcManager([this](const QByteArray &data, const Endpoint &to) { sendDatagram(data, to); }, this);
+    m_rpc->setReadOnly(m_config.readOnly);
     m_maintenance.start(MaintenanceIntervalMs);
     return true;
 }
@@ -87,6 +88,16 @@ void DhtNode::close()
 quint16 DhtNode::port() const
 {
     return m_socket ? m_socket->localPort() : 0;
+}
+
+void DhtNode::setReadOnly(bool readOnly)
+{
+    if (m_config.readOnly == readOnly)
+        return;
+    m_config.readOnly = readOnly;
+    if (m_rpc)
+        m_rpc->setReadOnly(readOnly);
+    emit changed();
 }
 
 void DhtNode::setId(const NodeId &id)
@@ -175,6 +186,15 @@ void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from, co
         return;
     }
     ++m_stats.queriesIn;
+
+    // BEP 43: a read-only node "no longer responds to query messages that it
+    // receives". Dropping them here also means nothing is learned from the
+    // sender and nothing is stored, since announce_peer and put never get
+    // any further. Our own queries still go out, so lookups keep working.
+    if (m_config.readOnly) {
+        ++m_stats.readOnlyDropped;
+        return;
+    }
 
     const auto senderId = message.senderId();
     if (!senderId) {

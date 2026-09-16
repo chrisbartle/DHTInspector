@@ -63,6 +63,7 @@ EngineStatistics toStatistics(const dht::EngineStats &s)
     out.timeouts = s.timeouts;
     out.malformedIn = s.malformedIn;
     out.rateLimited = s.rateLimited;
+    out.readOnlyDropped = s.readOnlyDropped;
     out.storedInfohashes = s.storedInfohashes;
     out.storedPeers = s.storedPeers;
     out.activeLookups = s.activeLookups;
@@ -191,6 +192,19 @@ QString DhtController::validateNodeId(const QString &text) const
     return {};
 }
 
+void DhtController::setReadOnlyMode(bool enabled)
+{
+    if (enabled == m_readOnlyMode)
+        return;
+    m_readOnlyMode = enabled;
+    emit readOnlyModeChanged();
+
+    if (m_engine) {
+        QMetaObject::invokeMethod(m_engine, [engine = m_engine, enabled] { engine->setReadOnly(enabled); },
+                                  Qt::QueuedConnection);
+    }
+}
+
 void DhtController::setPortForwarding(bool enabled)
 {
     if (enabled == m_portForwarding)
@@ -282,6 +296,7 @@ void DhtController::startEngine()
     config.enableIpv6 = m_ipv6Enabled;
     config.portForwarding = m_portForwarding;
     config.bep42 = m_bep42Enabled;
+    config.readOnly = m_readOnlyMode;
     config.nodeIdV4 = *idV4;
     config.nodeIdV6 = idV6;
 

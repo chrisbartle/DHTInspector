@@ -35,6 +35,7 @@ class DhtController : public QObject
     Q_PROPERTY(bool ipv6Enabled READ ipv6Enabled WRITE setIpv6Enabled NOTIFY ipv6EnabledChanged)
     Q_PROPERTY(bool portForwarding READ portForwarding WRITE setPortForwarding NOTIFY portForwardingChanged)
     Q_PROPERTY(bool bep42Enabled READ bep42Enabled WRITE setBep42Enabled NOTIFY bep42EnabledChanged)
+    Q_PROPERTY(bool readOnlyMode READ readOnlyMode WRITE setReadOnlyMode NOTIFY readOnlyModeChanged)
     Q_PROPERTY(QString nodeIdV4 READ nodeIdV4 WRITE setNodeIdV4 NOTIFY nodeIdV4Changed)
     Q_PROPERTY(QString nodeIdV6 READ nodeIdV6 WRITE setNodeIdV6 NOTIFY nodeIdV6Changed)
 
@@ -82,6 +83,10 @@ public:
     void setPortForwarding(bool enabled);
     bool bep42Enabled() const { return m_bep42Enabled; }
     void setBep42Enabled(bool enabled);
+    // BEP 43. Unlike the other engine settings this one can be flipped while
+    // the engine is running, because it changes nothing but behaviour.
+    bool readOnlyMode() const { return m_readOnlyMode; }
+    void setReadOnlyMode(bool enabled);
 
     // Node IDs as typed, normally 40 hex digits. Editable while stopped;
     // while running they follow the engine, which may replace them (BEP 42).
@@ -158,6 +163,7 @@ signals:
     void ipv6EnabledChanged();
     void portForwardingChanged();
     void bep42EnabledChanged();
+    void readOnlyModeChanged();
     void nodeIdV4Changed();
     void nodeIdV6Changed();
     void snapshotChanged();
@@ -195,6 +201,7 @@ private:
     bool m_ipv6Enabled = false;
     bool m_portForwarding = false;
     bool m_bep42Enabled = true;
+    bool m_readOnlyMode = false;
     QString m_nodeIdV4;
     QString m_nodeIdV6;
 

@@ -334,6 +334,36 @@ ScrollView {
                 Layout.fillWidth: true
                 spacing: Theme.spacing
 
+                FieldLabel { text: qsTr("Read-only") }
+
+                ControlledSwitch {
+                    Accessible.name: qsTr("Read-only")
+                    value: DhtController.readOnlyMode
+                    onRequested: on => DhtController.readOnlyMode = on
+                }
+
+                Badge {
+                    visible: page.running && DhtController.readOnlyMode
+                    text: qsTr("answering nothing")
+                    tone: Theme.warn
+                }
+
+                Hint {
+                    text: {
+                        if (!DhtController.readOnlyMode)
+                            return qsTr("Marks every query we send with the BEP 43 \"ro\" flag, so well-behaved nodes keep us out of their routing tables. We then answer no incoming queries and store nothing for anyone; our own searches still work. Can be changed while running.")
+                        const dropped = DhtController.stats.readOnlyDropped
+                        if (page.running && dropped > 0)
+                            return qsTr("Queries we send carry \"ro\" and we answer none. %n received so far ignored.", "", dropped)
+                        return qsTr("Queries we send carry \"ro\" and we answer none. Nothing new can be stored here while this is on.")
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.spacing
+
                 FieldLabel { text: qsTr("Port forwarding") }
 
                 ControlledSwitch {
@@ -586,6 +616,7 @@ ScrollView {
                 StatTile { label: qsTr("Errors received"); value: String(DhtController.stats.errorsIn) }
                 StatTile { label: qsTr("Malformed received"); value: String(DhtController.stats.malformedIn) }
                 StatTile { label: qsTr("Rate limited"); value: String(DhtController.stats.rateLimited) }
+                StatTile { label: qsTr("Dropped (read-only)"); value: String(DhtController.stats.readOnlyDropped) }
                 StatTile { label: qsTr("Active lookups"); value: String(DhtController.stats.activeLookups) }
                 StatTile { label: qsTr("Stored peers"); value: qsTr("%1 across %2 infohashes").arg(DhtController.stats.storedPeers).arg(DhtController.stats.storedInfohashes) }
             }

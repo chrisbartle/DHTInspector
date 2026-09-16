@@ -102,13 +102,15 @@ ParseResult parse(QByteArrayView datagram)
 }
 
 QByteArray encodeQuery(const QByteArray &transactionId, const QByteArray &method,
-                       BValue::Dict arguments, const QByteArray &version)
+                       BValue::Dict arguments, const QByteArray &version, bool readOnly)
 {
     BValue::Dict root;
     root.emplace("t", transactionId);
     root.emplace("y", "q");
     root.emplace("q", method);
     root.emplace("a", std::move(arguments));
+    if (readOnly)
+        root.emplace("ro", BValue(1));  // BEP 43
     if (!version.isEmpty())
         root.emplace("v", version);
     return bencode(BValue(std::move(root)));

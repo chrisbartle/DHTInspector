@@ -26,6 +26,7 @@ private slots:
     void usableRemote();
     void escapesBytes();
     void describesAResponseInFull();
+    void readOnlyQueriesCarryTheFlag();
 };
 
 void TestKrpc::parsesSpecPing()
@@ -53,6 +54,28 @@ void TestKrpc::queryRoundTrip()
     QCOMPARE(*r.message->senderId(), id);
     QCOMPARE(r.message->version, version);
     QVERIFY(!r.message->reportedAddress);
+}
+
+// BEP 43: "ro" goes in the top-level dictionary of a query, not in "a",
+// and only when the sender is read-only.
+void TestKrpc::readOnlyQueriesCarryTheFlag()
+{
+    BValue::Dict args;
+    args.emplace("id", BValue(NodeId::random().toBytes()));
+
+    const QByteArray plain = krpc::encodeQuery("aa", "ping", args, {});
+    QVERIFY(!plain.contains("2:roi"));
+    const auto parsedPlain = krpc::parse(plain);
+    QVERIFY(parsedPlain.message);
+    QVERIFY(!parsedPlain.message->readOnly);
+
+    const QByteArray flagged = krpc::encodeQuery("aa", "ping", args, {}, true);
+    QVERIFY(flagged.contains("2:roi1e"));
+    const auto parsedFlagged = krpc::parse(flagged);
+    QVERIFY(parsedFlagged.message);
+    QVERIFY(parsedFlagged.message->readOnly);
+    // Top level, so the arguments are untouched.
+    QVERIFY(!parsedFlagged.message->body.integerAt("ro"));
 }
 
 void TestKrpc::responseCarriesRequesterAddress()

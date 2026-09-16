@@ -23,6 +23,9 @@ struct EngineConfig
     // BEP 42: adopt node IDs derived from the agreed external address, and
     // tell every node in our replies which address we see it from.
     bool bep42 = true;
+    // BEP 43: send "ro" on every query and answer none, so other nodes keep
+    // us out of their routing tables.
+    bool readOnly = false;
     bool allowLocalAddresses = false;  // for LAN and loopback testing
     QHostAddress bindAddressV4;        // null: any
     QHostAddress bindAddressV6;        // null: any
@@ -62,6 +65,7 @@ public:
     void bootstrap();
 
     void setPortForwarding(bool enabled);
+    void setReadOnly(bool enabled);
 
     void getPeers(const NodeId &infohash, std::function<void(const std::vector<Endpoint> &peers)> done);
     void announce(const NodeId &infohash, quint16 port, bool impliedPort, std::function<void(int accepted)> done);

@@ -33,7 +33,7 @@ void RpcManager::query(const Endpoint &to, const QByteArray &method, BValue::Dic
 {
     const QByteArray tid = nextTransactionId();
     const qint64 now = nowMs();
-    const QByteArray datagram = krpc::encodeQuery(tid, method, std::move(arguments), version);
+    const QByteArray datagram = krpc::encodeQuery(tid, method, std::move(arguments), version, m_readOnly);
     m_pending.insert(tid, Pending{to, datagram, now, now + timeoutMs, std::move(callback)});
     m_send(datagram, to);
 }

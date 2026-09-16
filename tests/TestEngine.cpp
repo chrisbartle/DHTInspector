@@ -75,6 +75,20 @@ std::optional<krpc::Message> exchange(QUdpSocket &socket, quint16 port, const QB
     return std::nullopt;
 }
 
+// The next query the engine sends us, as opposed to a reply.
+std::optional<krpc::Message> waitForQuery(QUdpSocket &socket, int timeoutMs)
+{
+    QDeadlineTimer deadline(timeoutMs);
+    while (!deadline.hasExpired()) {
+        if (!QTest::qWaitFor([&] { return socket.hasPendingDatagrams(); }, int(deadline.remainingTime())))
+            break;
+        const auto parsed = krpc::parse(socket.receiveDatagram().data());
+        if (parsed.message && parsed.message->type == krpc::MessageType::Query)
+            return parsed.message;
+    }
+    return std::nullopt;
+}
+
 BValue::Dict withId(const NodeId &id, BValue::Dict args = {})
 {
     args.insert_or_assign("id", BValue(id.toBytes()));
@@ -109,6 +123,7 @@ private slots:
     void bep44MutableItems();
     void searchesAndPublishesAcrossASwarm();
     void probesASingleNode();
+    void readOnlyModeAnswersNothing();
 };
 
 void TestEngine::swarmConvergesAndSharesPeers()
@@ -885,6 +900,47 @@ int runTestEngine(int argc, char **argv)
 {
     TestEngine test;
     return QTest::qExec(&test, argc, argv);
+}
+
+// BEP 43: read-only nodes flag their own queries and answer none of ours.
+void TestEngine::readOnlyModeAnswersNothing()
+{
+    EngineConfig config = loopbackConfig();
+    config.readOnly = true;
+    auto engine = startEngineWith(config);
+    QVERIFY(engine);
+    const quint16 port = portOf(*engine);
+
+    QUdpSocket client;
+    QVERIFY(client.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const NodeId clientId = NodeId::random();
+
+    // What it sends carries "ro" so nobody keeps it in a routing table.
+    engine->addNode(QStringLiteral("127.0.0.1"), client.localPort());
+    const auto outgoing = waitForQuery(client, 5000);
+    QVERIFY(outgoing);
+    QVERIFY(outgoing->readOnly);
+
+    // What it receives is dropped: no response, and no error either.
+    QVERIFY(!exchange(client, port, "r1", "ping", withId(clientId)));
+    QCOMPARE(engine->node(Family::IPv4)->stats().readOnlyDropped, qint64(1));
+    QCOMPARE(nodeCount(*engine), 0);
+
+    // An announce cannot get through while nothing is answered.
+    BValue::Dict announceArgs;
+    announceArgs.emplace("info_hash", BValue(NodeId::random().toBytes()));
+    announceArgs.emplace("port", BValue(5555));
+    announceArgs.emplace("token", BValue(QByteArray("whatever")));
+    QVERIFY(!exchange(client, port, "r2", "announce_peer", withId(clientId, std::move(announceArgs))));
+    QCOMPARE(engine->storage().peerCount(), 0);
+
+    // Turning it off while running restores normal service.
+    engine->setReadOnly(false);
+    const auto reply = exchange(client, port, "r3", "ping", withId(clientId));
+    QVERIFY(reply);
+    QCOMPARE(reply->type, krpc::MessageType::Response);
+    QCOMPARE(*reply->senderId(), engine->node(Family::IPv4)->id());
+    QCOMPARE(engine->node(Family::IPv4)->stats().readOnlyDropped, qint64(2));
 }
 
 #include "TestEngine.moc"

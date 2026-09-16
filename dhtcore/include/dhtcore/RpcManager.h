@@ -38,6 +38,11 @@ public:
     void query(const Endpoint &to, const QByteArray &method, BValue::Dict arguments,
                const QByteArray &version, Callback callback, int timeoutMs = DefaultTimeoutMs);
 
+    // BEP 43: mark every outgoing query read-only. Queries already sent keep
+    // whatever flag they carried.
+    void setReadOnly(bool readOnly) { m_readOnly = readOnly; }
+    bool isReadOnly() const { return m_readOnly; }
+
     // Returns true if the response or error matched an outstanding query.
     // A reply only matches if it comes from the endpoint we queried.
     bool handleReply(const krpc::Message &message, const QByteArray &datagram, const Endpoint &from);
@@ -62,6 +67,7 @@ private:
     QHash<QByteArray, Pending> m_pending;
     QTimer m_timer;
     quint16 m_nextId = 0;
+    bool m_readOnly = false;
 };
 
 } // namespace dht

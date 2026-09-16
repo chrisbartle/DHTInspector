@@ -44,8 +44,10 @@ struct ParseResult
 
 ParseResult parse(QByteArrayView datagram);
 
+// BEP 43: `readOnly` adds "ro" = 1 to the top level, telling the receiver
+// not to put us in its routing table. It belongs on queries only.
 QByteArray encodeQuery(const QByteArray &transactionId, const QByteArray &method,
-                       BValue::Dict arguments, const QByteArray &version);
+                       BValue::Dict arguments, const QByteArray &version, bool readOnly = false);
 
 QByteArray encodeResponse(const QByteArray &transactionId, BValue::Dict values,
                           const QByteArray &version, const Endpoint &requester);

@@ -76,6 +76,7 @@ struct EngineStats
     qint64 timeouts = 0;
     qint64 malformedIn = 0;
     qint64 rateLimited = 0;
+    qint64 readOnlyDropped = 0;  // queries ignored because BEP 43 read-only is on
     int storedInfohashes = 0;
     int storedPeers = 0;
     int activeLookups = 0;
@@ -93,6 +94,7 @@ struct EngineStats
         timeouts += o.timeouts;
         malformedIn += o.malformedIn;
         rateLimited += o.rateLimited;
+        readOnlyDropped += o.readOnlyDropped;
         activeLookups += o.activeLookups;
     }
 };

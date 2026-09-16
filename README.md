@@ -15,7 +15,7 @@ Two jobs, one tool:
 
 | Area | State |
 |---|---|
-| DHT engine (`dhtcore`) | Working: BEP 5, BEP 32, BEP 42, BEP 43 handling, peer storage |
+| DHT engine (`dhtcore`) | Working: BEP 5, BEP 32, BEP 42, BEP 43, BEP 44, peer storage |
 | Port forwarding | Working against test gateways: PCP with NAT-PMP fallback |
 | Setup tab | Working |
 | Search tab | Working: peer and item lookups, announce, BEP 44 publishing |
@@ -38,6 +38,9 @@ Two jobs, one tool:
   are exempt. With BEP 42 off, each node keeps its random ID and sends no `ip`.
 - Only adds a node to the routing table after it answers one of our queries,
   keeps at most one node per public IP, and rate-limits queries per source.
+- BEP 43 read-only mode, off by default and switchable while running: every
+  query we send carries `ro`, and every query we receive is dropped without a
+  reply, so the store gains nothing while it is on. Our own lookups still work.
 - Node IDs can be given explicitly; otherwise each node picks a random one.
 - Stopping the engine destroys it: routing tables, stored peers and tokens are
   all discarded. The Setup tab keeps the node IDs that were in use, so a

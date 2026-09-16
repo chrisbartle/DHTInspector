@@ -66,6 +66,43 @@ ScrollView {
         width: page.availableWidth
         spacing: Theme.spacingLarge
 
+        // BEP 43 read-only means we answer no queries, so no one can announce
+        // a peer or store an item with us. Worth saying plainly here, where an
+        // empty or shrinking store would otherwise look like a fault.
+        Rectangle {
+            Layout.fillWidth: true
+            visible: DhtController.readOnlyMode
+            implicitHeight: readOnlyNotice.implicitHeight + 2 * Theme.spacing
+            radius: Theme.radius
+            color: Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.12)
+            border.width: 1
+            border.color: Qt.rgba(Theme.warn.r, Theme.warn.g, Theme.warn.b, 0.45)
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: Theme.spacing
+                spacing: Theme.spacing
+
+                Badge { text: qsTr("read-only"); tone: Theme.warn }
+
+                Label {
+                    id: readOnlyNotice
+
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    color: Theme.text
+                    font.pixelSize: Theme.fontSizeSmall
+                    text: {
+                        const base = qsTr("Read-only mode is on, so this node answers no queries. Nothing new can be announced or stored here, and anything listed below will disappear as it expires. Turn it off on the Setup tab.")
+                        const dropped = DhtController.stats.readOnlyDropped
+                        return page.running && dropped > 0
+                               ? base + " " + qsTr("%n query has been ignored so far.", "", dropped)
+                               : base
+                    }
+                }
+            }
+        }
+
         Panel {
             Layout.fillWidth: true
             title: qsTr("Data Store")
