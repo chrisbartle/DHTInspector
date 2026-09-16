@@ -209,6 +209,7 @@ struct ProbeResult
     QString decoded;  // the whole response, decoded
     QString summary;  // one line
     QByteArray token;  // carried over for announce and put
+    QByteArray version;  // the node's "v" field, empty if it sent none
 };
 
 // Announce and put both write to the nodes closest to a target.

@@ -2,6 +2,7 @@ qt_add_library(dhtcore STATIC
     include/dhtcore/Bencode.h       src/Bencode.cpp
     include/dhtcore/Bep42.h         src/Bep42.cpp
     include/dhtcore/Bep44.h         src/Bep44.cpp
+    include/dhtcore/ClientVersion.h src/ClientVersion.cpp
     include/dhtcore/Crc32c.h        src/Crc32c.cpp
     include/dhtcore/DhtEngine.h     src/DhtEngine.cpp
     include/dhtcore/DhtNode.h       src/DhtNode.cpp

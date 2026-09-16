@@ -299,6 +299,7 @@ ProbeResult resultFrom(const Endpoint &endpoint, const QByteArray &method, const
     }
 
     out.response = reply.datagram;
+    out.version = reply.message.version;
     out.decoded = krpc::describe(reply.message);
     out.token = reply.message.body.stringAt("token").value_or(QByteArray());
 

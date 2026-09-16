@@ -1,6 +1,7 @@
 #include "DhtController.h"
 
 #include "dhtcore/Bep44.h"
+#include "dhtcore/ClientVersion.h"
 #include "dhtcore/DhtEngine.h"
 
 #include <QHostInfo>
@@ -715,6 +716,14 @@ ProbeStatus DhtController::probe() const
     out.rtt = result.rttMs >= 0 && !result.timedOut ? tr("%1 ms").arg(result.rttMs) : tr("—");
     out.errorMessage = result.errorMessage;
     out.time = exchange->time;
+
+    if (!result.response.isEmpty()) {
+        const dht::ClientInfo client = dht::decodeClientVersion(result.version);
+        out.client = client.display();
+        out.clientKind = dht::clientKindName(client.kind);
+        out.clientNote = client.note;
+        out.clientRaw = client.rawText();
+    }
     return out;
 }
 

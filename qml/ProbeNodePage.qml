@@ -46,6 +46,7 @@ ScrollView {
         property string label
         property string value
         property color tone: Theme.text
+        property bool mono: true
 
         Layout.fillWidth: true
         spacing: Theme.spacing
@@ -57,8 +58,8 @@ ScrollView {
             text: resultRow.value
             color: resultRow.tone
             font.pixelSize: Theme.fontSizeSmall
-            font.family: Theme.monoFamily
-            wrapMode: Text.WrapAnywhere
+            font.family: resultRow.mono ? Theme.monoFamily : Qt.application.font.family
+            wrapMode: resultRow.mono ? Text.WrapAnywhere : Text.WordWrap
         }
     }
 
@@ -257,6 +258,47 @@ ScrollView {
                       : DhtController.probe.valid ? Theme.bad : Theme.textFaint
             }
             ResultRow { label: qsTr("Round trip"); value: DhtController.probe.rtt; visible: DhtController.probe.valid }
+
+            // Decoded from the reply's "v" field by dhtcore, the same decoder
+            // network-wide client tallies use.
+            ResultRow {
+                label: qsTr("Client")
+                value: DhtController.probe.client
+                mono: false
+                visible: DhtController.probe.client !== ""
+                tone: DhtController.probe.clientKind === "known" ? Theme.text
+                      : DhtController.probe.clientKind === "absent" ? Theme.textDim : Theme.warn
+            }
+            ResultRow {
+                label: qsTr("Version field")
+                value: DhtController.probe.clientRaw
+                tone: Theme.textDim
+                visible: DhtController.probe.clientRaw !== ""
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.spacing
+                visible: DhtController.probe.client !== ""
+
+                FieldLabel {}
+                Hint {
+                    text: {
+                        const p = DhtController.probe
+                        let parts = []
+                        if (p.clientNote !== "")
+                            parts.push(p.clientNote.charAt(0).toUpperCase() + p.clientNote.slice(1) + ".")
+                        if (p.clientKind === "absent")
+                            parts.push(qsTr("The reply had no \"v\" key. Some clients, Transmission among them, never send one."))
+                        else if (p.clientKind === "unknown")
+                            parts.push(qsTr("A client code this tool has no name for."))
+                        else if (p.clientKind === "nonstandard")
+                            parts.push(qsTr("BEP 5 expects two code characters and two version bytes."))
+                        if (p.clientKind !== "absent")
+                            parts.push(qsTr("Self-reported and unauthenticated: a node can claim to be anything."))
+                        return parts.join(" ")
+                    }
+                }
+            }
             ResultRow { label: qsTr("Summary"); value: DhtController.probe.summary; visible: DhtController.probe.valid }
             ResultRow {
                 label: qsTr("Problem")

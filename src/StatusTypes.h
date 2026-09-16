@@ -109,6 +109,10 @@ class ProbeStatus
     Q_PROPERTY(QString rtt MEMBER rtt)
     Q_PROPERTY(QString errorMessage MEMBER errorMessage)
     Q_PROPERTY(QString time MEMBER time)
+    Q_PROPERTY(QString client MEMBER client)
+    Q_PROPERTY(QString clientKind MEMBER clientKind)
+    Q_PROPERTY(QString clientNote MEMBER clientNote)
+    Q_PROPERTY(QString clientRaw MEMBER clientRaw)
 
 public:
     bool valid = false;
@@ -122,6 +126,11 @@ public:
     QString rtt;
     QString errorMessage;
     QString time;
+    // From the node's "v" field, only when it replied.
+    QString client;      // e.g. "libtorrent (Rasterbar) 2.0.11"
+    QString clientKind;  // known, unknown, nonstandard or absent
+    QString clientNote;
+    QString clientRaw;   // the field as sent, escaped and in hex
 };
 
 class PeerSearchStatus
