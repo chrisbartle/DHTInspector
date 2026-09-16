@@ -26,6 +26,7 @@ struct NodeConfig
     bool allowLocalAddresses = false;  // accept private/loopback endpoints from the network
     bool bep42 = true;                 // derived node IDs and "ip" in replies
     bool readOnly = false;             // BEP 43: query others, answer nobody
+    HostLimit hostLimit;               // how fast we may query any one host
     std::optional<NodeId> nodeId;      // random when unset
     QByteArray version;                // KRPC "v" field
 };
@@ -39,7 +40,10 @@ class DhtNode : public QObject
 public:
     enum class SeedSource { Injected, Bootstrap };
 
-    DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, QObject *parent = nullptr);
+    // `budget` is the engine-wide send limit, shared with the other family;
+    // null means unlimited.
+    DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, SendBudget *budget = nullptr,
+            QObject *parent = nullptr);
     ~DhtNode() override;
 
     bool bind(QString *error);
@@ -124,6 +128,7 @@ private:
                    RpcManager::Callback callback);
     void sendResponse(const krpc::Message &query, const Endpoint &to, BValue::Dict values);
     void sendError(const QByteArray &transactionId, const Endpoint &to, int code, const QByteArray &message);
+    bool budgetAllowsReply();
 
     void onRpcReply(const RpcReply &reply);
     bool isRouter(const Endpoint &endpoint) const;
@@ -138,6 +143,7 @@ private:
     NodeConfig m_config;
     PeerStorage *m_storage;
     ItemStorage *m_items;
+    SendBudget *m_budget;
     QUdpSocket *m_socket = nullptr;
     RpcManager *m_rpc = nullptr;
     NodeId m_id;

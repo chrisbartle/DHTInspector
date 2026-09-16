@@ -8,8 +8,11 @@
 
 #include "dhtcore/Snapshot.h"
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QStringList>
+
+#include <deque>
 #include <QtQml/qqmlregistration.h>
 
 class QThread;
@@ -36,6 +39,7 @@ class DhtController : public QObject
     Q_PROPERTY(bool portForwarding READ portForwarding WRITE setPortForwarding NOTIFY portForwardingChanged)
     Q_PROPERTY(bool bep42Enabled READ bep42Enabled WRITE setBep42Enabled NOTIFY bep42EnabledChanged)
     Q_PROPERTY(bool readOnlyMode READ readOnlyMode WRITE setReadOnlyMode NOTIFY readOnlyModeChanged)
+    Q_PROPERTY(int sendLimit READ sendLimit WRITE setSendLimit NOTIFY sendLimitChanged)
     Q_PROPERTY(QString nodeIdV4 READ nodeIdV4 WRITE setNodeIdV4 NOTIFY nodeIdV4Changed)
     Q_PROPERTY(QString nodeIdV6 READ nodeIdV6 WRITE setNodeIdV6 NOTIFY nodeIdV6Changed)
 
@@ -88,6 +92,10 @@ public:
     // the engine is running, because it changes nothing but behaviour.
     bool readOnlyMode() const { return m_readOnlyMode; }
     void setReadOnlyMode(bool enabled);
+    // Bytes per second for everything we send; 0 is unlimited. Applies at
+    // once, whether or not the engine is running.
+    int sendLimit() const { return m_sendLimit; }
+    void setSendLimit(int bytesPerSecond);
 
     // Node IDs as typed, normally 40 hex digits. Editable while stopped;
     // while running they follow the engine, which may replace them (BEP 42).
@@ -171,6 +179,7 @@ signals:
     void portForwardingChanged();
     void bep42EnabledChanged();
     void readOnlyModeChanged();
+    void sendLimitChanged();
     void nodeIdV4Changed();
     void nodeIdV6Changed();
     void snapshotChanged();
@@ -211,6 +220,17 @@ private:
     bool m_portForwarding = false;
     bool m_bep42Enabled = true;
     bool m_readOnlyMode = false;
+    int m_sendLimit = 0;
+
+    // Recent byte totals, for the transfer rates.
+    struct TrafficSample
+    {
+        qint64 atMs;
+        qint64 bytesIn;
+        qint64 bytesOut;
+    };
+    std::deque<TrafficSample> m_traffic;
+    QElapsedTimer m_trafficClock;
     QString m_nodeIdV4;
     QString m_nodeIdV6;
 

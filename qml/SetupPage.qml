@@ -32,6 +32,23 @@ ScrollView {
         return (n / (1024 * 1024 * 1024)).toFixed(2) + " GiB"
     }
 
+    // Send limit positions, in KiB/s; one past the end means unlimited.
+    readonly property var sendLimitSteps: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
+
+    function sendLimitIndex(bytes) {
+        if (bytes <= 0)
+            return sendLimitSteps.length
+        for (let i = 0; i < sendLimitSteps.length; ++i) {
+            if (sendLimitSteps[i] * 1024 >= bytes)
+                return i
+        }
+        return sendLimitSteps.length - 1
+    }
+
+    function sendLimitAt(index) {
+        return index >= sendLimitSteps.length ? 0 : sendLimitSteps[index] * 1024
+    }
+
     function mappingTone(state) {
         switch (state) {
         case "mapped": return Theme.good
@@ -364,6 +381,59 @@ ScrollView {
                 Layout.fillWidth: true
                 spacing: Theme.spacing
 
+                FieldLabel { text: qsTr("Send limit") }
+
+                ThemedSlider {
+                    id: sendLimitSlider
+
+                    // Always shows the controller's value. A move is sent as
+                    // a request and the binding restored, the same pattern as
+                    // the switches, so assistive tools that set the value
+                    // directly work too.
+                    readonly property int wanted: page.sendLimitIndex(DhtController.sendLimit)
+
+                    Layout.preferredWidth: 220
+                    Accessible.name: qsTr("Send limit")
+                    from: 0
+                    to: page.sendLimitSteps.length
+                    stepSize: 1
+                    snapMode: Slider.SnapAlways
+                    live: true
+                    value: wanted
+                    onValueChanged: {
+                        const index = Math.round(value)
+                        if (index !== wanted) {
+                            DhtController.sendLimit = page.sendLimitAt(index)
+                            value = Qt.binding(() => sendLimitSlider.wanted)
+                        }
+                    }
+                }
+
+                Label {
+                    Layout.preferredWidth: 90
+                    text: DhtController.sendLimit > 0 ? Theme.formatRate(DhtController.sendLimit) : qsTr("Unlimited")
+                    color: DhtController.sendLimit > 0 ? Theme.text : Theme.textDim
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.family: Theme.monoFamily
+                }
+
+                Hint {
+                    text: {
+                        let t = qsTr("Caps everything this node sends, both address families together, counting UDP payload. Over the limit our own queries wait their turn and incoming queries go unanswered, as libtorrent does. Takes effect immediately. Separately, no single host is ever sent more than two queries a second.")
+                        if (page.running && DhtController.sendLimit > 0) {
+                            t += " " + qsTr("Sending %1 now.").arg(Theme.formatRate(DhtController.stats.bytesOutPerSecond))
+                            if (DhtController.stats.repliesShed > 0)
+                                t += " " + qsTr("%n incoming query(s) left unanswered so far.", "", DhtController.stats.repliesShed)
+                        }
+                        return t
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.spacing
+
                 FieldLabel { text: qsTr("Port forwarding") }
 
                 ControlledSwitch {
@@ -609,7 +679,7 @@ ScrollView {
         Panel {
             Layout.fillWidth: true
             title: qsTr("Traffic")
-            subtitle: qsTr("Totals since the engine started, both address families combined.")
+            subtitle: qsTr("Totals since the engine started, both address families combined. So that no node is overwhelmed, queries to any one IP address are held to two a second; extra ones wait their turn, and are refused only if more than 64 are already waiting.")
 
             GridLayout {
                 Layout.fillWidth: true
@@ -626,6 +696,16 @@ ScrollView {
                 StatTile { label: qsTr("Malformed received"); value: String(DhtController.stats.malformedIn) }
                 StatTile { label: qsTr("Rate limited"); value: String(DhtController.stats.rateLimited) }
                 StatTile { label: qsTr("Dropped (read-only)"); value: String(DhtController.stats.readOnlyDropped) }
+                StatTile { label: qsTr("Unanswered (send limit)"); value: String(DhtController.stats.repliesShed) }
+                StatTile {
+                    label: qsTr("Rate out / in")
+                    value: Theme.formatRate(DhtController.stats.bytesOutPerSecond) + " / " + Theme.formatRate(DhtController.stats.bytesInPerSecond)
+                }
+                StatTile {
+                    label: qsTr("Held back / refused")
+                    value: qsTr("%1 / %2").arg(DhtController.stats.queriesDelayed).arg(DhtController.stats.queriesRefused)
+                           + (DhtController.stats.queriesWaiting > 0 ? qsTr(" (%1 waiting)").arg(DhtController.stats.queriesWaiting) : "")
+                }
                 StatTile { label: qsTr("Active lookups"); value: String(DhtController.stats.activeLookups) }
                 StatTile { label: qsTr("Stored peers"); value: qsTr("%1 across %2 infohashes").arg(DhtController.stats.storedPeers).arg(DhtController.stats.storedInfohashes) }
             }

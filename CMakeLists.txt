@@ -60,6 +60,7 @@ qt_add_qml_module(DHTInspector
         qml/AddressLink.qml
         qml/ThemedButton.qml
         qml/ThemedSwitch.qml
+        qml/ThemedSlider.qml
         qml/ThemedTextField.qml
         qml/EmptyState.qml
         qml/SearchPage.qml

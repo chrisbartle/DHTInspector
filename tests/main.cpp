@@ -11,6 +11,7 @@ int runTestEngine(int argc, char **argv);
 int runTestKrpc(int argc, char **argv);
 int runTestPortMapper(int argc, char **argv);
 int runTestRoutingTable(int argc, char **argv);
+int runTestRpcManager(int argc, char **argv);
 int runTestSupport(int argc, char **argv);
 
 namespace {
@@ -48,6 +49,7 @@ int main(int argc, char **argv)
     failures += runSuite(runTestKrpc, "TestKrpc", argc, argv);
     failures += runSuite(runTestSupport, "TestSupport", argc, argv);
     failures += runSuite(runTestRoutingTable, "TestRoutingTable", argc, argv);
+    failures += runSuite(runTestRpcManager, "TestRpcManager", argc, argv);
     failures += runSuite(runTestPortMapper, "TestPortMapper", argc, argv);
     failures += runSuite(runTestEngine, "TestEngine", argc, argv);
     return failures;

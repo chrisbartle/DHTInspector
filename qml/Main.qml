@@ -150,6 +150,36 @@ ApplicationWindow {
 
             Item { Layout.fillWidth: true }
 
+            // Live transfer rates, averaged over a few seconds.
+            Label {
+                id: rates
+
+                readonly property double outRate: DhtController.stats.bytesOutPerSecond
+                readonly property double inRate: DhtController.stats.bytesInPerSecond
+                readonly property int limit: DhtController.sendLimit
+                readonly property bool nearLimit: limit > 0 && outRate >= limit * 0.9
+
+                visible: DhtController.running
+                text: String.fromCharCode(0x2191) + " " + Theme.formatRate(outRate)
+                      + (limit > 0 ? " / " + Theme.formatRate(limit) : "")
+                      + "    " + String.fromCharCode(0x2193) + " " + Theme.formatRate(inRate)
+                color: nearLimit ? Theme.warn : Theme.textDim
+                font.pixelSize: Theme.fontSizeSmall
+                font.family: Theme.monoFamily
+                Accessible.role: Accessible.StaticText
+                Accessible.name: (limit > 0 ? qsTr("Sending %1 of a %2 limit, receiving %3")
+                                                  .arg(Theme.formatRate(outRate)).arg(Theme.formatRate(limit))
+                                            : qsTr("Sending %1, receiving %2").arg(Theme.formatRate(outRate)))
+                                 .arg(Theme.formatRate(inRate))
+            }
+
+            Rectangle {
+                visible: rates.visible
+                implicitWidth: 1
+                implicitHeight: 14
+                color: Theme.border
+            }
+
             Label {
                 text: qsTr("v%1").arg(Qt.application.version)
                 color: Theme.textFaint

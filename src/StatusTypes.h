@@ -72,6 +72,12 @@ class EngineStatistics
     Q_PROPERTY(qint64 malformedIn MEMBER malformedIn)
     Q_PROPERTY(qint64 rateLimited MEMBER rateLimited)
     Q_PROPERTY(qint64 readOnlyDropped MEMBER readOnlyDropped)
+    Q_PROPERTY(qint64 queriesDelayed MEMBER queriesDelayed)
+    Q_PROPERTY(qint64 queriesRefused MEMBER queriesRefused)
+    Q_PROPERTY(int queriesWaiting MEMBER queriesWaiting)
+    Q_PROPERTY(qint64 repliesShed MEMBER repliesShed)
+    Q_PROPERTY(double bytesInPerSecond MEMBER bytesInPerSecond)
+    Q_PROPERTY(double bytesOutPerSecond MEMBER bytesOutPerSecond)
     Q_PROPERTY(int storedInfohashes MEMBER storedInfohashes)
     Q_PROPERTY(int storedPeers MEMBER storedPeers)
     Q_PROPERTY(int activeLookups MEMBER activeLookups)
@@ -89,6 +95,13 @@ public:
     qint64 malformedIn = 0;
     qint64 rateLimited = 0;
     qint64 readOnlyDropped = 0;
+    qint64 queriesDelayed = 0;
+    qint64 queriesRefused = 0;
+    int queriesWaiting = 0;
+    qint64 repliesShed = 0;
+    // Averaged over the last few seconds of snapshots.
+    double bytesInPerSecond = 0;
+    double bytesOutPerSecond = 0;
     int storedInfohashes = 0;
     int storedPeers = 0;
     int activeLookups = 0;

@@ -35,6 +35,16 @@ QtObject {
                                        : Qt.platform.os === "osx"     ? "Menlo"
                                                                       : "monospace"
 
+    // Binary units, like the byte totals: "512 B/s", "1.5 KiB/s", "16 KiB/s".
+    function formatRate(bytesPerSecond) {
+        const n = Math.max(0, bytesPerSecond)
+        if (n < 1024)
+            return Math.round(n) + " B/s"
+        const scaled = n < 1024 * 1024 ? n / 1024 : n / (1024 * 1024)
+        const unit = n < 1024 * 1024 ? " KiB/s" : " MiB/s"
+        return (scaled < 10 ? parseFloat(scaled.toFixed(1)) : Math.round(scaled)) + unit
+    }
+
     function nodeStatusColor(status) {
         switch (status) {
         case "good":

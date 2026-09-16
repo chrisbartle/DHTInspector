@@ -175,4 +175,27 @@ private:
     double m_burst;
 };
 
+// Everything the engine may send, in bytes per second, shared by both
+// address families. Sending may overdraw it by one datagram; the next send
+// then waits until the balance is positive again. A limit of 0 means
+// unlimited. Holds at most one second's worth, so an idle spell does not
+// save up a large burst.
+class SendBudget
+{
+public:
+    void setLimit(qint64 bytesPerSecond, qint64 now);
+    qint64 limit() const { return m_limit; }
+    bool isLimited() const { return m_limit > 0; }
+
+    bool available(qint64 now);
+    void spend(qint64 bytes, qint64 now);
+
+private:
+    void refill(qint64 now);
+
+    qint64 m_limit = 0;
+    double m_balance = 0;
+    qint64 m_last = 0;
+};
+
 } // namespace dht

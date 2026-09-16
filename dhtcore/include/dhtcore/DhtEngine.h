@@ -26,6 +26,11 @@ struct EngineConfig
     // BEP 43: send "ro" on every query and answer none, so other nodes keep
     // us out of their routing tables.
     bool readOnly = false;
+    // The most we will ask of any single host; see HostLimit.
+    HostLimit hostLimit;
+    // Everything we send, both families together, in bytes per second of
+    // UDP payload. 0 means unlimited. Adjustable while running.
+    qint64 sendLimit = 0;
     bool allowLocalAddresses = false;  // for LAN and loopback testing
     QHostAddress bindAddressV4;        // null: any
     QHostAddress bindAddressV6;        // null: any
@@ -66,6 +71,8 @@ public:
 
     void setPortForwarding(bool enabled);
     void setReadOnly(bool enabled);
+    void setSendLimit(qint64 bytesPerSecond);
+    qint64 sendLimit() const { return m_budget.limit(); }
 
     void getPeers(const NodeId &infohash, std::function<void(const std::vector<Endpoint> &peers)> done);
     void announce(const NodeId &infohash, quint16 port, bool impliedPort, std::function<void(int accepted)> done);
@@ -114,6 +121,7 @@ private:
     EngineConfig m_config;
     PeerStorage m_storage;
     ItemStorage m_items;
+    SendBudget m_budget;
     DhtNode *m_v4 = nullptr;
     DhtNode *m_v6 = nullptr;
     QString m_v6Error;

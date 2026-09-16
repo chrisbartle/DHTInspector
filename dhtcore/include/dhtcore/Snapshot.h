@@ -77,6 +77,10 @@ struct EngineStats
     qint64 malformedIn = 0;
     qint64 rateLimited = 0;
     qint64 readOnlyDropped = 0;  // queries ignored because BEP 43 read-only is on
+    qint64 queriesDelayed = 0;   // our queries that waited for a host's allowance
+    qint64 queriesRefused = 0;   // our queries never sent: too many already waiting
+    int queriesWaiting = 0;      // waiting right now
+    qint64 repliesShed = 0;      // queries left unanswered because of the send limit
     int storedInfohashes = 0;
     int storedPeers = 0;
     int activeLookups = 0;
@@ -95,6 +99,10 @@ struct EngineStats
         malformedIn += o.malformedIn;
         rateLimited += o.rateLimited;
         readOnlyDropped += o.readOnlyDropped;
+        queriesDelayed += o.queriesDelayed;
+        queriesRefused += o.queriesRefused;
+        queriesWaiting += o.queriesWaiting;
+        repliesShed += o.repliesShed;
         activeLookups += o.activeLookups;
     }
 };

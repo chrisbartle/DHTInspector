@@ -4,6 +4,7 @@
 #include "dhtcore/Krpc.h"
 
 #include <QDeadlineTimer>
+#include <QElapsedTimer>
 #include <QNetworkDatagram>
 #include <QTest>
 #include <QRegularExpression>
@@ -28,6 +29,9 @@ EngineConfig loopbackConfig(bool ipv6 = false)
     config.bindAddressV4 = QHostAddress(QHostAddress::LocalHost);
     config.enableIpv6 = ipv6;
     config.bindAddressV6 = QHostAddress(QHostAddress::LocalHostIPv6);
+    // Every test node shares 127.0.0.1, and the per-host limit is per
+    // address, so swarm tests would otherwise crawl.
+    config.hostLimit = HostLimit{1000.0, 1000.0, 10000};
     return config;
 }
 
@@ -124,6 +128,8 @@ private slots:
     void searchesAndPublishesAcrossASwarm();
     void probesASingleNode();
     void readOnlyModeAnswersNothing();
+    void neverOverwhelmsOneHost();
+    void sendLimitShedsRepliesAndCanBeLifted();
 };
 
 void TestEngine::swarmConvergesAndSharesPeers()
@@ -941,6 +947,127 @@ void TestEngine::readOnlyModeAnswersNothing()
     QCOMPARE(reply->type, krpc::MessageType::Response);
     QCOMPARE(*reply->senderId(), engine->node(Family::IPv4)->id());
     QCOMPARE(engine->node(Family::IPv4)->stats().readOnlyDropped, qint64(2));
+}
+
+// However much is asked of one host, it gets no more than the per-host
+// allowance, and the queries that had to wait still succeed.
+void TestEngine::neverOverwhelmsOneHost()
+{
+    EngineConfig config = loopbackConfig();
+    config.hostLimit = HostLimit{};  // the real defaults
+    auto engine = startEngineWith(config);
+    QVERIFY(engine);
+
+    QUdpSocket node;
+    QVERIFY(node.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const Endpoint nodeEndpoint(QHostAddress(QHostAddress::LocalHost), node.localPort());
+    const NodeId nodeId = NodeId::random();
+
+    std::vector<ProbeResult> results;
+    connect(engine.get(), &DhtEngine::probeFinished, this,
+            [&](const ProbeResult &r) { results.push_back(r); });
+
+    // The node answers everything at once and notes when each query came.
+    QElapsedTimer clock;
+    clock.start();
+    std::vector<qint64> arrivals;
+    int pings = 0;
+    connect(&node, &QUdpSocket::readyRead, this, [&] {
+        while (node.hasPendingDatagrams()) {
+            const QNetworkDatagram d = node.receiveDatagram();
+            const auto parsed = krpc::parse(d.data());
+            if (!parsed.message || parsed.message->type != krpc::MessageType::Query)
+                continue;
+            arrivals.push_back(clock.elapsed());
+            if (parsed.message->method == "ping")
+                ++pings;
+            BValue::Dict values;
+            values.emplace("id", BValue(nodeId.toBytes()));
+            node.writeDatagram(krpc::encodeResponse(parsed.message->transactionId, values, {}, Endpoint()),
+                               d.senderAddress(), quint16(d.senderPort()));
+        }
+    });
+
+    constexpr int Asked = 10;
+    for (int i = 0; i < Asked; ++i)
+        engine->probe(nodeEndpoint, "ping", {});
+
+    QTRY_COMPARE_WITH_TIMEOUT(int(results.size()), Asked, 10000);
+    QCOMPARE(pings, Asked);
+    for (const ProbeResult &r : results)
+        QVERIFY2(!r.timedOut && !r.isError && r.errorMessage.isEmpty(), qPrintable(r.summary));
+
+    // Burst of two, then two a second: never more than four in a second,
+    // and the eight that waited took about four seconds.
+    for (qint64 start : arrivals) {
+        const auto inWindow = std::count_if(arrivals.begin(), arrivals.end(),
+                                            [&](qint64 t) { return t >= start && t < start + 1000; });
+        QVERIFY2(inWindow <= 4, qPrintable(QStringLiteral("%1 queries within a second").arg(inWindow)));
+    }
+    QVERIFY2(arrivals.back() >= 3500, qPrintable(QString::number(arrivals.back())));
+
+    const EngineStats stats = engine->node(Family::IPv4)->stats();
+    QVERIFY2(stats.queriesDelayed >= Asked - 2, qPrintable(QString::number(stats.queriesDelayed)));
+    QCOMPARE(stats.queriesRefused, qint64(0));
+    QCOMPARE(stats.timeouts, qint64(0));
+    QCOMPARE(stats.queriesWaiting, 0);
+}
+
+// Over the send limit incoming queries go unanswered; lifting the limit
+// while running restores service at once.
+void TestEngine::sendLimitShedsRepliesAndCanBeLifted()
+{
+    EngineConfig config = loopbackConfig();
+    config.sendLimit = 300;  // a few replies' worth
+    auto engine = startEngineWith(config);
+    QVERIFY(engine);
+    QCOMPARE(engine->sendLimit(), qint64(300));
+    const quint16 port = portOf(*engine);
+
+    QUdpSocket client;
+    QVERIFY(client.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const NodeId clientId = NodeId::random();
+
+    const auto pingBurst = [&](const QByteArray &prefix, int count) {
+        for (int i = 0; i < count; ++i) {
+            const QByteArray tid = prefix + QByteArray::number(i);
+            client.writeDatagram(krpc::encodeQuery(tid, "ping", withId(clientId), {}),
+                                 QHostAddress(QHostAddress::LocalHost), port);
+        }
+    };
+    // Replies to our pings, ignoring the engine's own queries to us.
+    const auto collectReplies = [&](const QByteArray &prefix, int waitMs) {
+        int replies = 0;
+        qint64 bytes = 0;
+        QDeadlineTimer deadline(waitMs);
+        while (!deadline.hasExpired()) {
+            if (!QTest::qWaitFor([&] { return client.hasPendingDatagrams(); }, int(deadline.remainingTime())))
+                break;
+            const QByteArray data = client.receiveDatagram().data();
+            const auto parsed = krpc::parse(data);
+            if (parsed.message && parsed.message->type == krpc::MessageType::Response
+                && parsed.message->transactionId.startsWith(prefix)) {
+                ++replies;
+                bytes += data.size();
+            }
+        }
+        return std::make_pair(replies, bytes);
+    };
+
+    pingBurst("a", 30);
+    const auto [limitedReplies, limitedBytes] = collectReplies("a", 800);
+    QVERIFY2(limitedReplies > 0 && limitedReplies < 30, qPrintable(QString::number(limitedReplies)));
+    // A full second's worth, what refilled in the wait, and one overdraw.
+    QVERIFY2(limitedBytes <= 300 + 300 * 0.8 + 150, qPrintable(QString::number(limitedBytes)));
+    const EngineStats stats = engine->node(Family::IPv4)->stats();
+    QVERIFY2(stats.repliesShed >= 30 - limitedReplies, qPrintable(QString::number(stats.repliesShed)));
+
+    engine->setSendLimit(0);
+    QCOMPARE(engine->sendLimit(), qint64(0));
+    pingBurst("b", 10);
+    const auto [freeReplies, freeBytes] = collectReplies("b", 800);
+    Q_UNUSED(freeBytes);
+    QCOMPARE(freeReplies, 10);
 }
 
 #include "TestEngine.moc"

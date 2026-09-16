@@ -18,6 +18,9 @@ private slots:
     void storageExpiresPeers();
     void storagePeerCap();
     void rateLimiterRefills();
+    void sendBudgetUnlimitedByDefault();
+    void sendBudgetOverdrawsOnceThenWaits();
+    void sendBudgetChangesLive();
 };
 
 void TestSupport::tokensValidateForTenMinutes()
@@ -140,6 +143,52 @@ void TestSupport::rateLimiterRefills()
     QVERIFY(!limiter.allow(a, 0));
     QVERIFY(limiter.allow(a, 100)); // one token back after 100 ms at 10/s
     QVERIFY(limiter.allow(QHostAddress(QStringLiteral("203.0.113.2")), 0));
+}
+
+void TestSupport::sendBudgetUnlimitedByDefault()
+{
+    SendBudget budget;
+    QVERIFY(!budget.isLimited());
+    budget.spend(1'000'000, 0);
+    QVERIFY(budget.available(0));
+}
+
+void TestSupport::sendBudgetOverdrawsOnceThenWaits()
+{
+    SendBudget budget;
+    budget.setLimit(1000, 0);  // starts with a full second
+
+    budget.spend(600, 0);
+    QVERIFY(budget.available(0));
+    budget.spend(600, 0);  // one datagram may overdraw
+    QVERIFY(!budget.available(0));
+    QVERIFY(!budget.available(150));  // back to -50
+    QVERIFY(budget.available(250));   // +50
+
+    // Idle time saves up at most one second.
+    QVERIFY(budget.available(60'000));
+    budget.spend(1000, 60'000);
+    QVERIFY(!budget.available(60'000));
+}
+
+void TestSupport::sendBudgetChangesLive()
+{
+    SendBudget budget;
+    budget.setLimit(1000, 0);
+    budget.spend(1500, 0);
+    QVERIFY(!budget.available(0));
+
+    // Raising the limit refills faster from where it stands...
+    budget.setLimit(10'000, 0);
+    QVERIFY(budget.available(60));
+    // ...lowering it caps what is saved up...
+    budget.setLimit(100, 60);
+    budget.spend(100, 60);
+    QVERIFY(!budget.available(60));
+    // ...and lifting it altogether ends any wait.
+    budget.setLimit(0, 60);
+    QVERIFY(budget.available(60));
+    QCOMPARE(budget.limit(), qint64(0));
 }
 
 int runTestSupport(int argc, char **argv)

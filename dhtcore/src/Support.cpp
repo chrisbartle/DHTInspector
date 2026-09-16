@@ -353,6 +353,44 @@ bool RateLimiter::allow(const QHostAddress &address, qint64 now)
     return true;
 }
 
+void SendBudget::setLimit(qint64 bytesPerSecond, qint64 now)
+{
+    bytesPerSecond = std::max<qint64>(0, bytesPerSecond);
+    if (bytesPerSecond == m_limit)
+        return;
+    const bool wasLimited = isLimited();
+    m_limit = bytesPerSecond;
+    if (!wasLimited)
+        m_balance = double(m_limit);  // start with a full second
+    else
+        m_balance = std::min(m_balance, double(m_limit));
+    m_last = now;
+}
+
+void SendBudget::refill(qint64 now)
+{
+    if (now > m_last) {
+        m_balance = std::min(double(m_limit), m_balance + double(now - m_last) * double(m_limit) / 1000.0);
+        m_last = now;
+    }
+}
+
+bool SendBudget::available(qint64 now)
+{
+    if (!isLimited())
+        return true;
+    refill(now);
+    return m_balance > 0;
+}
+
+void SendBudget::spend(qint64 bytes, qint64 now)
+{
+    if (!isLimited())
+        return;
+    refill(now);
+    m_balance -= double(bytes);
+}
+
 void RateLimiter::prune(qint64 now)
 {
     const qint64 refillMs = qint64(m_burst / m_rate * 1000.0);

@@ -28,11 +28,13 @@ QByteArray sortKeyFor(Family family, bool hasId, const NodeId &id, const NodeId 
 
 } // namespace
 
-DhtNode::DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, QObject *parent)
+DhtNode::DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, SendBudget *budget,
+                 QObject *parent)
     : QObject(parent)
     , m_config(config)
     , m_storage(storage)
     , m_items(items)
+    , m_budget(budget)
     , m_id(config.nodeId ? *config.nodeId : NodeId::random())
     , m_table(m_id)
     , m_maintenance(this)
@@ -70,6 +72,8 @@ bool DhtNode::bind(QString *error)
 
     m_rpc = new RpcManager([this](const QByteArray &data, const Endpoint &to) { sendDatagram(data, to); }, this);
     m_rpc->setReadOnly(m_config.readOnly);
+    m_rpc->setHostLimit(m_config.hostLimit);
+    m_rpc->setBudget(m_budget);
     m_maintenance.start(MaintenanceIntervalMs);
     return true;
 }
@@ -116,6 +120,8 @@ void DhtNode::sendDatagram(const QByteArray &data, const Endpoint &to)
     if (m_socket->writeDatagram(data, to.address, to.port) >= 0) {
         ++m_stats.packetsOut;
         m_stats.bytesOut += data.size();
+        if (m_budget)
+            m_budget->spend(data.size(), nowMs());
     }
 }
 
@@ -135,6 +141,17 @@ void DhtNode::sendQuery(const Endpoint &to, const QByteArray &method, BValue::Di
                      if (callback)
                          callback(reply);
                  });
+}
+
+bool DhtNode::budgetAllowsReply()
+{
+    // Over the send limit, incoming queries go unanswered, as libtorrent
+    // does with dht_upload_rate_limit. Our own queries wait instead, since
+    // dropping them would make a healthy node look dead.
+    if (!m_budget || m_budget->available(nowMs()))
+        return true;
+    ++m_stats.repliesShed;
+    return false;
 }
 
 void DhtNode::sendResponse(const krpc::Message &query, const Endpoint &to, BValue::Dict values)
@@ -195,6 +212,11 @@ void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from, co
         ++m_stats.readOnlyDropped;
         return;
     }
+
+    // Over the send limit we could not answer, so the query is dropped
+    // before it changes anything.
+    if (!budgetAllowsReply())
+        return;
 
     const auto senderId = message.senderId();
     if (!senderId) {
@@ -449,6 +471,8 @@ void DhtNode::onRpcReply(const RpcReply &reply)
     case RpcReply::Status::Error:
         ++m_stats.errorsIn;
         return;
+    case RpcReply::Status::Throttled:
+        return;  // never sent, so nothing to hold against the node
     case RpcReply::Status::Response:
         break;
     }
@@ -525,7 +549,7 @@ void DhtNode::addSeed(const Endpoint &endpoint, SeedSource source)
         if (it == self->m_seeds.end())
             return;
 
-        if (reply.status == RpcReply::Status::Timeout) {
+        if (reply.status == RpcReply::Status::Timeout || reply.status == RpcReply::Status::Throttled) {
             it->state = Seed::State::NoResponse;
             emit self->changed();
             return;
@@ -784,6 +808,11 @@ void DhtNode::appendNodeRows(std::vector<NodeRow> &rows, qint64 now) const
 EngineStats DhtNode::stats() const
 {
     EngineStats s = m_stats;
+    if (m_rpc) {
+        s.queriesDelayed = m_rpc->delayedCount();
+        s.queriesRefused = m_rpc->refusedCount();
+        s.queriesWaiting = m_rpc->queuedCount();
+    }
     s.activeLookups = 0;
     for (const QPointer<Lookup> &lookup : m_lookups) {
         if (lookup && !lookup->isDone())

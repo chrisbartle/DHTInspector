@@ -65,6 +65,10 @@ EngineStatistics toStatistics(const dht::EngineStats &s)
     out.malformedIn = s.malformedIn;
     out.rateLimited = s.rateLimited;
     out.readOnlyDropped = s.readOnlyDropped;
+    out.queriesDelayed = s.queriesDelayed;
+    out.queriesRefused = s.queriesRefused;
+    out.queriesWaiting = s.queriesWaiting;
+    out.repliesShed = s.repliesShed;
     out.storedInfohashes = s.storedInfohashes;
     out.storedPeers = s.storedPeers;
     out.activeLookups = s.activeLookups;
@@ -193,6 +197,21 @@ QString DhtController::validateNodeId(const QString &text) const
     return {};
 }
 
+void DhtController::setSendLimit(int bytesPerSecond)
+{
+    bytesPerSecond = std::max(0, bytesPerSecond);
+    if (bytesPerSecond == m_sendLimit)
+        return;
+    m_sendLimit = bytesPerSecond;
+    emit sendLimitChanged();
+
+    if (m_engine) {
+        QMetaObject::invokeMethod(
+            m_engine, [engine = m_engine, bytesPerSecond] { engine->setSendLimit(bytesPerSecond); },
+            Qt::QueuedConnection);
+    }
+}
+
 void DhtController::setReadOnlyMode(bool enabled)
 {
     if (enabled == m_readOnlyMode)
@@ -298,6 +317,7 @@ void DhtController::startEngine()
     config.portForwarding = m_portForwarding;
     config.bep42 = m_bep42Enabled;
     config.readOnly = m_readOnlyMode;
+    config.sendLimit = m_sendLimit;
     config.nodeIdV4 = *idV4;
     config.nodeIdV6 = idV6;
 
@@ -357,6 +377,7 @@ void DhtController::resetStatus()
     m_ipv6 = FamilyStatus{};
     m_portMapping = PortMappingStatus{};
     m_stats = EngineStatistics{};
+    m_traffic.clear();
     m_nodes->clear();
     clearDataStore();
     clearSearch();
@@ -381,6 +402,23 @@ void DhtController::applySnapshot(const dht::EngineSnapshot &snapshot)
     }
     m_portMapping = toPortMappingStatus(snapshot.portMapping);
     m_stats = toStatistics(snapshot.stats);
+
+    // Rates over a sliding window: snapshots also arrive early when
+    // something changes, so single intervals would be noisy.
+    constexpr qint64 WindowMs = 3000;
+    if (!m_trafficClock.isValid())
+        m_trafficClock.start();
+    const qint64 now = m_trafficClock.elapsed();
+    m_traffic.push_back({now, snapshot.stats.bytesIn, snapshot.stats.bytesOut});
+    while (m_traffic.size() > 2 && now - m_traffic[1].atMs >= WindowMs)
+        m_traffic.pop_front();
+    const TrafficSample &oldest = m_traffic.front();
+    if (now - oldest.atMs >= 250) {
+        const double seconds = double(now - oldest.atMs) / 1000.0;
+        m_stats.bytesInPerSecond = double(snapshot.stats.bytesIn - oldest.bytesIn) / seconds;
+        m_stats.bytesOutPerSecond = double(snapshot.stats.bytesOut - oldest.bytesOut) / seconds;
+    }
+
     m_nodes->update(snapshot.nodes);
     emit snapshotChanged();
     if (m_ipv4.port != previousPort)

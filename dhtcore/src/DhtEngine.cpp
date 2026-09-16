@@ -55,6 +55,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
     if (m_running)
         return true;
     m_config = config;
+    m_budget.setLimit(config.sendLimit, nowMs());
 
     NodeConfig v4;
     v4.family = Family::IPv4;
@@ -63,10 +64,11 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
     v4.allowLocalAddresses = config.allowLocalAddresses;
     v4.bep42 = config.bep42;
     v4.readOnly = config.readOnly;
+    v4.hostLimit = config.hostLimit;
     v4.nodeId = config.nodeIdV4;
     v4.version = clientVersion();
 
-    m_v4 = new DhtNode(v4, &m_storage, &m_items, this);
+    m_v4 = new DhtNode(v4, &m_storage, &m_items, &m_budget, this);
     if (!m_v4->bind(error)) {
         delete m_v4;
         m_v4 = nullptr;
@@ -80,7 +82,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
         v6.bindAddress = config.bindAddressV6;
         v6.nodeId = config.nodeIdV6;
         v6.port = m_v4->port(); // same port number on both families
-        m_v6 = new DhtNode(v6, &m_storage, &m_items, this);
+        m_v6 = new DhtNode(v6, &m_storage, &m_items, &m_budget, this);
         if (m_v6->bind(&m_v6Error)) {
             connect(m_v6, &DhtNode::changed, this, &DhtEngine::scheduleSnapshot);
             m_v4->setSibling(m_v6);
@@ -204,6 +206,13 @@ void DhtEngine::bootstrap()
     }
 }
 
+void DhtEngine::setSendLimit(qint64 bytesPerSecond)
+{
+    m_config.sendLimit = bytesPerSecond;
+    m_budget.setLimit(bytesPerSecond, nowMs());
+    scheduleSnapshot();
+}
+
 void DhtEngine::setReadOnly(bool enabled)
 {
     m_config.readOnly = enabled;
@@ -288,6 +297,10 @@ ProbeResult resultFrom(const Endpoint &endpoint, const QByteArray &method, const
     case RpcReply::Status::Timeout:
         out.timedOut = true;
         out.summary = QStringLiteral("no reply within the timeout");
+        return out;
+    case RpcReply::Status::Throttled:
+        out.errorMessage = QStringLiteral("not sent: too many queries already waiting for this host");
+        out.summary = out.errorMessage;
         return out;
     case RpcReply::Status::Error:
         out.isError = true;

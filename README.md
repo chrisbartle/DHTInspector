@@ -38,6 +38,18 @@ Two jobs, one tool:
   are exempt. With BEP 42 off, each node keeps its random ID and sends no `ip`.
 - Only adds a node to the routing table after it answers one of our queries,
   keeps at most one node per public IP, and rate-limits queries per source.
+- Never floods a node: every query we send, whatever asked for it, is held
+  to two a second per IP address with a burst of two (at most 4 in any
+  second, 22 in any ten; libtorrent bans addresses averaging over 5 a second
+  across 10 seconds). Extra queries wait their turn, and their timeout only
+  starts once sent. More than 64 waiting for one address are refused, and a
+  refused query is not held against the node.
+- Optional overall send limit (Setup tab, adjustable while running, off by
+  default): a byte budget shared by both address families, counting UDP
+  payload. Over it, our own queries wait their turn, taken host by host so
+  none is starved, and incoming queries are dropped unanswered before they
+  change anything, as libtorrent does. Current send and receive rates are on
+  the status bar.
 - BEP 43 read-only mode, off by default and switchable while running: every
   query we send carries `ro`, and every query we receive is dropped without a
   reply, so the store gains nothing while it is on. Our own lookups still work.
