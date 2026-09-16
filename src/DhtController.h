@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DataStoreModels.h"
+#include "SearchModels.h"
 #include "NodeListModel.h"
 #include "StatusTypes.h"
 
@@ -50,7 +51,7 @@ class DhtController : public QObject
 
     Q_PROPERTY(bool searchBusy READ searchBusy NOTIFY searchChanged)
     Q_PROPERTY(QString searchStatus READ searchStatus NOTIFY searchChanged)
-    Q_PROPERTY(QStringList peerResults READ peerResults NOTIFY searchChanged)
+    Q_PROPERTY(PeerResultModel *peerResults READ peerResults CONSTANT)
     Q_PROPERTY(PeerSearchStatus peerSearch READ peerSearch NOTIFY searchChanged)
     Q_PROPERTY(ItemSearchStatus itemSearch READ itemSearch NOTIFY searchChanged)
     Q_PROPERTY(bool publishBusy READ publishBusy NOTIFY publishChanged)
@@ -97,7 +98,7 @@ public:
 
     bool searchBusy() const { return m_searchBusy; }
     QString searchStatus() const { return m_searchStatus; }
-    QStringList peerResults() const { return m_peerResults; }
+    PeerResultModel *peerResults() const { return m_peerResults; }
     PeerSearchStatus peerSearch() const { return m_peerSearch; }
     ItemSearchStatus itemSearch() const { return m_itemSearch; }
     bool publishBusy() const { return m_publishBusy; }
@@ -122,6 +123,9 @@ public:
 
     // Search tab. Empty string from validateHash() means the text is usable.
     Q_INVOKABLE QString validateHash(const QString &text) const;
+    // A fresh 160-bit hash, so a search target is genuinely random
+    // rather than a typed pattern others may have announced to.
+    Q_INVOKABLE QString randomHash() const;
     Q_INVOKABLE void searchPeers(const QString &hash);
     Q_INVOKABLE void searchItem(const QString &hash, const QString &salt);
     Q_INVOKABLE void announcePeer(const QString &hash, int port, bool impliedPort);
@@ -187,7 +191,7 @@ private:
 
     bool m_searchBusy = false;
     QString m_searchStatus;
-    QStringList m_peerResults;
+    PeerResultModel *m_peerResults;
     PeerSearchStatus m_peerSearch;
     ItemSearchStatus m_itemSearch;
     bool m_publishBusy = false;

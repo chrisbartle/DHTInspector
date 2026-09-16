@@ -18,6 +18,7 @@ Two jobs, one tool:
 | DHT engine (`dhtcore`) | Working: BEP 5, BEP 32, BEP 42, BEP 43 handling, peer storage |
 | Port forwarding | Working against test gateways: PCP with NAT-PMP fallback |
 | Setup tab | Working |
+| Search tab | Working: peer and item lookups, announce, BEP 44 publishing |
 | Data Store tab | Working: announced peers with addresses and expiry |
 | Global Health tab | Layout only |
 | Probe Node tab | Layout only |

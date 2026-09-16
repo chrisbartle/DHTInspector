@@ -27,6 +27,15 @@ ScrollView {
         wrapMode: Text.WordWrap
     }
 
+    component Cell: Label {
+        property int cellWidth: 0
+        Layout.preferredWidth: cellWidth
+        Layout.fillWidth: cellWidth === 0
+        elide: Text.ElideRight
+        font.pixelSize: Theme.fontSizeSmall
+        color: Theme.text
+    }
+
     component ResultRow: RowLayout {
         id: resultRow
 
@@ -55,11 +64,11 @@ ScrollView {
         width: page.availableWidth
         spacing: Theme.spacingLarge
 
-        // --- Lookup ----------------------------------------------------------
+        // --- One hash, three things to do with it -----------------------------
         Panel {
             Layout.fillWidth: true
-            title: qsTr("Lookup")
-            subtitle: qsTr("A 20-byte hash is either a torrent infohash, searched with get_peers, or a BEP 44 target, fetched with get. Both walk the DHT the same way, asking ever closer nodes until none are nearer.")
+            title: qsTr("Hash")
+            subtitle: qsTr("A 20-byte hash is either a torrent infohash, which peers are searched for and announced to, or a BEP 44 target, whose stored item is fetched. Announcing publishes this node as a peer: the DHT records the address an announce came from, so the address is ours and only the port is yours to choose.")
 
             RowLayout {
                 Layout.fillWidth: true
@@ -71,27 +80,41 @@ ScrollView {
                     id: hashField
 
                     readonly property string validation: DhtController.validateHash(text)
+                    readonly property bool usable: page.running && text.trim().length > 0 && validation === ""
 
                     Layout.fillWidth: true
-                    Accessible.name: qsTr("Hash to look up")
+                    Accessible.name: qsTr("Hash")
                     enabled: page.running && !DhtController.searchBusy
                     placeholderText: qsTr("40 hexadecimal digits")
                     invalid: validation !== ""
                 }
 
                 ThemedButton {
+                    text: qsTr("Random")
+                    Accessible.name: qsTr("Generate a random hash")
+                    enabled: !DhtController.searchBusy
+                    onClicked: hashField.text = DhtController.randomHash()
+                }
+
+                ThemedButton {
                     text: qsTr("Find peers")
                     primary: true
-                    enabled: page.running && !DhtController.searchBusy && hashField.text.trim().length > 0
-                             && hashField.validation === ""
+                    enabled: hashField.usable && !DhtController.searchBusy
                     onClicked: DhtController.searchPeers(hashField.text)
                 }
 
                 ThemedButton {
                     text: qsTr("Fetch item")
-                    enabled: page.running && !DhtController.searchBusy && hashField.text.trim().length > 0
-                             && hashField.validation === ""
+                    enabled: hashField.usable && !DhtController.searchBusy
                     onClicked: DhtController.searchItem(hashField.text, saltField.text)
+                }
+
+                ThemedButton {
+                    text: qsTr("Announce")
+                    enabled: hashField.usable && !DhtController.publishBusy
+                             && (impliedPort.checked || announcePort.acceptableInput)
+                    onClicked: DhtController.announcePeer(hashField.text, parseInt(announcePort.text),
+                                                          impliedPort.checked)
                 }
             }
 
@@ -112,10 +135,35 @@ ScrollView {
                 Hint { text: qsTr("Only for mutable items, which are stored under the hash of a public key and this salt.") }
             }
 
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.spacing
+
+                FieldLabel { text: qsTr("Announce port") }
+
+                ThemedTextField {
+                    id: announcePort
+                    Layout.preferredWidth: 90
+                    Accessible.name: qsTr("Peer port to announce")
+                    enabled: page.running && !DhtController.publishBusy && !impliedPort.checked
+                    text: "6881"
+                    validator: IntValidator { bottom: 1; top: 65535 }
+                    invalid: !acceptableInput
+                }
+
+                ThemedSwitch {
+                    id: impliedPort
+                    text: qsTr("use this node's own port")
+                    Accessible.name: qsTr("Announce the port this node listens on")
+                    enabled: page.running && !DhtController.publishBusy
+                }
+            }
+
             Label {
                 Layout.fillWidth: true
                 visible: hashField.validation !== "" || !page.running
-                text: !page.running ? qsTr("Start the engine on the Setup tab to search.") : hashField.validation
+                text: !page.running ? qsTr("Start the engine on the Setup tab to search or announce.")
+                                    : hashField.validation
                 color: !page.running ? Theme.textFaint : Theme.bad
                 font.pixelSize: Theme.fontSizeSmall
             }
@@ -128,50 +176,114 @@ ScrollView {
                 wrapMode: Text.WordWrap
                 visible: text !== ""
             }
+
+            Label {
+                Layout.fillWidth: true
+                visible: DhtController.publishStatus.kindId === "announce"
+                text: DhtController.publishStatus.error !== ""
+                      ? DhtController.publishStatus.error
+                      : qsTr("Announced to %1 of %2 nodes for %3")
+                        .arg(DhtController.publishStatus.accepted)
+                        .arg(DhtController.publishStatus.attempted)
+                        .arg(DhtController.publishStatus.target)
+                color: DhtController.publishStatus.error !== "" ? Theme.bad : Theme.textDim
+                font.pixelSize: Theme.fontSizeSmall
+                wrapMode: Text.WrapAnywhere
+            }
         }
 
-        // --- Peers -------------------------------------------------------------
+        // --- Peers, with the node that claimed each one ------------------------
         Panel {
             Layout.fillWidth: true
             title: qsTr("Peers")
             subtitle: DhtController.peerSearch.done
-                      ? qsTr("%1 peers from %2 of %3 nodes that answered")
-                        .arg(DhtController.peerResults.length)
+                      ? qsTr("%1 peers from %2 of %3 nodes that answered. Each peer is a claim by the node that returned it; nothing is verified until something connects to it.")
+                        .arg(DhtController.peerResults.count)
                         .arg(DhtController.peerSearch.responded)
                         .arg(DhtController.peerSearch.queried)
-                      : qsTr("Addresses announced for the infohash.")
+                      : qsTr("Addresses announced for the infohash, and which node returned each one.")
 
-            ListView {
-                id: peerList
-
+            ColumnLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 150
-                clip: true
-                boundsBehavior: Flickable.StopAtBounds
-                model: DhtController.peerResults
-                ScrollBar.vertical: ScrollBar {}
+                spacing: 0
 
-                delegate: Label {
-                    required property string modelData
-                    required property int index
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: 28
+                    color: Theme.surfaceAlt
+                    radius: Theme.radius
 
-                    width: ListView.view.width
-                    height: 24
-                    verticalAlignment: Text.AlignVCenter
-                    leftPadding: Theme.spacingSmall
-                    text: modelData
-                    color: Theme.text
-                    font.pixelSize: Theme.fontSizeSmall
-                    font.family: Theme.monoFamily
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.spacingSmall
+                        anchors.rightMargin: Theme.spacingSmall
+                        spacing: Theme.spacingSmall
+
+                        Cell { cellWidth: 200; text: qsTr("Peer"); color: Theme.textDim; font.weight: Font.DemiBold }
+                        Cell { text: qsTr("Returned by"); color: Theme.textDim; font.weight: Font.DemiBold }
+                        Cell { cellWidth: 70; text: qsTr("Nodes"); color: Theme.textDim; font.weight: Font.DemiBold }
+                    }
                 }
 
-                Label {
-                    anchors.centerIn: parent
-                    visible: peerList.count === 0
-                    text: DhtController.peerSearch.done ? qsTr("No peers announced for that infohash")
-                                                        : qsTr("No search run yet")
-                    color: Theme.textFaint
-                    font.pixelSize: Theme.fontSizeSmall
+                ListView {
+                    id: peerList
+
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 190
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: DhtController.peerResults
+                    ScrollBar.vertical: ScrollBar {}
+
+                    delegate: Rectangle {
+                        id: peerRow
+
+                        required property int index
+                        required property string peer
+                        required property string firstSource
+                        required property string sources
+                        required property int sourceCount
+
+                        width: ListView.view.width
+                        height: 26
+                        color: peerHover.hovered ? Theme.surfaceAlt
+                               : peerRow.index % 2 === 0 ? "transparent" : Qt.rgba(1, 1, 1, 0.02)
+
+                        HoverHandler { id: peerHover }
+                        ToolTip.visible: peerHover.hovered && peerRow.sourceCount > 1
+                        ToolTip.delay: 500
+                        ToolTip.text: peerRow.sources
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: Theme.spacingSmall
+                            anchors.rightMargin: Theme.spacingSmall
+                            spacing: Theme.spacingSmall
+
+                            Cell { cellWidth: 200; text: peerRow.peer; font.family: Theme.monoFamily }
+                            Cell {
+                                text: peerRow.sourceCount > 1
+                                      ? qsTr("%1 and %2 more").arg(peerRow.firstSource).arg(peerRow.sourceCount - 1)
+                                      : peerRow.firstSource
+                                font.family: Theme.monoFamily
+                                color: Theme.textDim
+                            }
+                            Cell {
+                                cellWidth: 70
+                                text: String(peerRow.sourceCount)
+                                color: peerRow.sourceCount > 1 ? Theme.good : Theme.textDim
+                            }
+                        }
+                    }
+
+                    Label {
+                        anchors.centerIn: parent
+                        visible: peerList.count === 0
+                        text: DhtController.peerSearch.done ? qsTr("No peers announced for that infohash")
+                                                            : qsTr("No search run yet")
+                        color: Theme.textFaint
+                        font.pixelSize: Theme.fontSizeSmall
+                    }
                 }
             }
         }
@@ -202,65 +314,6 @@ ScrollView {
                 text: qsTr("No item loaded.")
                 color: Theme.textFaint
                 font.pixelSize: Theme.fontSizeSmall
-            }
-        }
-
-        // --- Announce ------------------------------------------------------------
-        Panel {
-            Layout.fillWidth: true
-            title: qsTr("Announce a peer")
-            subtitle: qsTr("Tells the closest nodes that a peer for this infohash is reachable. The DHT always records the address the announce came from, so the address published is this node's own; only the port is yours to choose.")
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: Theme.spacing
-
-                FieldLabel { text: qsTr("Infohash") }
-
-                ThemedTextField {
-                    id: announceHash
-
-                    readonly property string validation: DhtController.validateHash(text)
-
-                    Layout.fillWidth: true
-                    Accessible.name: qsTr("Infohash to announce")
-                    enabled: page.running && !DhtController.publishBusy
-                    placeholderText: qsTr("40 hexadecimal digits")
-                    invalid: validation !== ""
-                }
-
-                ThemedTextField {
-                    id: announcePort
-                    Layout.preferredWidth: 90
-                    Accessible.name: qsTr("Peer port")
-                    enabled: page.running && !DhtController.publishBusy && !impliedPort.checked
-                    text: "6881"
-                    validator: IntValidator { bottom: 1; top: 65535 }
-                    invalid: !acceptableInput
-                }
-
-                ThemedButton {
-                    text: qsTr("Announce")
-                    primary: true
-                    enabled: page.running && !DhtController.publishBusy && announceHash.validation === ""
-                             && announceHash.text.trim().length > 0 && (impliedPort.checked || announcePort.acceptableInput)
-                    onClicked: DhtController.announcePeer(announceHash.text, parseInt(announcePort.text), impliedPort.checked)
-                }
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: Theme.spacing
-
-                FieldLabel { text: qsTr("Implied port") }
-
-                ThemedSwitch {
-                    id: impliedPort
-                    Accessible.name: qsTr("Use the port this node listens on")
-                    enabled: page.running && !DhtController.publishBusy
-                }
-
-                Hint { text: qsTr("Publishes the port this node is listening on, which is what a client behind NAT should do.") }
             }
         }
 
@@ -405,7 +458,7 @@ ScrollView {
 
             Label {
                 Layout.fillWidth: true
-                visible: DhtController.publishStatus.done || DhtController.publishStatus.error !== ""
+                visible: DhtController.publishStatus.kindId !== "" && DhtController.publishStatus.kindId !== "announce"
                 text: DhtController.publishStatus.error !== ""
                       ? DhtController.publishStatus.error
                       : qsTr("%1: stored by %2 of %3 nodes, under %4")

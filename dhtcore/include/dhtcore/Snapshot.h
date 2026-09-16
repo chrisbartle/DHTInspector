@@ -161,10 +161,19 @@ struct StorageSnapshot
 
 // --- search and publish results ---------------------------------------------
 
+// Which node handed back which peer. A peer list is only a claim by the node
+// that returned it, so the source is part of the finding.
+struct PeerSighting
+{
+    Endpoint peer;
+    Endpoint source;
+};
+
 struct PeerSearchResult
 {
     NodeId infohash;
-    std::vector<Endpoint> peers;
+    std::vector<Endpoint> peers;  // unique
+    std::vector<PeerSighting> sightings;
     int queried = 0;
     int responded = 0;
 };

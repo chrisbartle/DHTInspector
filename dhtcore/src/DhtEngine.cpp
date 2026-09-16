@@ -281,6 +281,8 @@ void DhtEngine::searchPeers(const NodeId &infohash)
     QPointer<DhtEngine> self(this);
     const auto collect = [self, state](const Lookup::Result &result) {
         state->result.peers.insert(state->result.peers.end(), result.peers.begin(), result.peers.end());
+        state->result.sightings.insert(state->result.sightings.end(), result.sightings.begin(),
+                                       result.sightings.end());
         state->result.queried += result.queried;
         state->result.responded += result.responded;
         if (--state->remaining == 0 && self)

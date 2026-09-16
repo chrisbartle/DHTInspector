@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dhtcore/RpcManager.h"
+#include "dhtcore/Snapshot.h"
 
 #include <QObject>
 #include <QSet>
@@ -31,7 +32,8 @@ public:
         Kind kind = Kind::FindNode;
         NodeId target;
         std::vector<Contact> closest;  // up to K responders, closest first
-        std::vector<Endpoint> peers;   // get_peers only
+        std::vector<Endpoint> peers;   // get_peers only, unique
+        std::vector<PeerSighting> sightings;  // get_peers only, with their source
         int queried = 0;
         int responded = 0;
 
@@ -56,6 +58,7 @@ public:
     static constexpr int Alpha = 3;
     static constexpr int MaxCandidates = 100;
     static constexpr int MaxQueries = 150;
+    static constexpr int MaxSightings = 2000;
 
     Lookup(Kind kind, const NodeId &target, Family family, const NodeId &selfId, bool allowLocal,
            QueryFn query, DoneFn done, QObject *parent = nullptr);
@@ -97,6 +100,7 @@ private:
     QSet<Endpoint> m_seen;
     QSet<Endpoint> m_peerSet;
     std::vector<Endpoint> m_peers;
+    std::vector<PeerSighting> m_sightings;
     QByteArray m_salt;
     bool m_itemFound = false;
     bool m_itemIsMutable = false;

@@ -145,6 +145,7 @@ class PublishStatus
     Q_GADGET
     QML_VALUE_TYPE(publishStatus)
     Q_PROPERTY(QString kind MEMBER kind)
+    Q_PROPERTY(QString kindId MEMBER kindId)  // announce, immutable, mutable
     Q_PROPERTY(QString target MEMBER target)
     Q_PROPERTY(int accepted MEMBER accepted)
     Q_PROPERTY(int attempted MEMBER attempted)
@@ -153,6 +154,7 @@ class PublishStatus
 
 public:
     QString kind;
+    QString kindId;
     QString target;
     int accepted = 0;
     int attempted = 0;

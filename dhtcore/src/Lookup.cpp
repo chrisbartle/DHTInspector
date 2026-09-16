@@ -132,6 +132,8 @@ void Lookup::onReply(const Endpoint &endpoint, const RpcReply &reply)
 
     if (m_kind == Kind::GetPeers) {
         for (const Endpoint &peer : krpc::decodePeers(body.listAt("values"), m_family)) {
+            if (int(m_sightings.size()) < MaxSightings)
+                m_sightings.push_back({peer, endpoint});
             if (!m_peerSet.contains(peer)) {
                 m_peerSet.insert(peer);
                 m_peers.push_back(peer);
@@ -198,6 +200,7 @@ void Lookup::finish()
     result.kind = m_kind;
     result.target = m_target;
     result.peers = m_peers;
+    result.sightings = m_sightings;
     result.queried = m_queries;
     result.responded = m_responded;
     result.itemFound = m_itemFound;

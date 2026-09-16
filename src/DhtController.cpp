@@ -75,6 +75,7 @@ DhtController::DhtController(QObject *parent)
     , m_storedInfohashes(new StoredInfohashModel(this))
     , m_storedPeers(new StoredPeerModel(this))
     , m_storedItems(new StoredItemModel(this))
+    , m_peerResults(new PeerResultModel(this))
 {
     qRegisterMetaType<dht::EngineSnapshot>();
     qRegisterMetaType<dht::StorageSnapshot>();
@@ -482,12 +483,17 @@ QString DhtController::validateHash(const QString &text) const
     return {};
 }
 
+QString DhtController::randomHash() const
+{
+    return dht::NodeId::random().toHex();
+}
+
 void DhtController::searchPeers(const QString &hash)
 {
     const auto target = dht::NodeId::fromHex(hash.trimmed());
     if (!m_engine || !target)
         return;
-    m_peerResults.clear();
+    m_peerResults->clear();
     m_peerSearch = PeerSearchStatus{};
     m_peerSearch.infohash = target->toHex();
     m_searchBusy = true;
@@ -589,16 +595,35 @@ QString DhtController::mutableTargetFor(const QString &publicKeyHex, const QStri
 
 void DhtController::applyPeerSearch(const dht::PeerSearchResult &result)
 {
-    m_peerResults.clear();
-    for (const dht::Endpoint &peer : result.peers)
-        m_peerResults << peer.toString();
-    m_peerResults.removeDuplicates();
+    // Group by peer, keeping every node that claimed it.
+    std::vector<PeerResultRow> rows;
+    QHash<QString, int> rowOf;
+    for (const dht::PeerSighting &sighting : result.sightings) {
+        const QString peer = sighting.peer.toString();
+        const QString source = sighting.source.toString();
+        const auto known = rowOf.constFind(peer);
+        if (known == rowOf.constEnd()) {
+            rowOf.insert(peer, int(rows.size()));
+            rows.push_back(PeerResultRow{peer, QStringList{source}});
+        } else if (!rows[*known].sources.contains(source)) {
+            rows[*known].sources << source;
+        }
+    }
+    // The peers the most nodes agree on first.
+    std::sort(rows.begin(), rows.end(), [](const PeerResultRow &a, const PeerResultRow &b) {
+        if (a.sources.size() != b.sources.size())
+            return a.sources.size() > b.sources.size();
+        return a.peer < b.peer;
+    });
+
+    const int peerCount = int(rows.size());
+    m_peerResults->update(std::move(rows));
     m_peerSearch.infohash = result.infohash.toHex();
     m_peerSearch.queried = result.queried;
     m_peerSearch.responded = result.responded;
     m_peerSearch.done = true;
     m_searchBusy = false;
-    m_searchStatus = tr("%n peer(s) found for %1.", nullptr, int(m_peerResults.size())).arg(m_peerSearch.infohash);
+    m_searchStatus = tr("%n peer(s) found for %1.", nullptr, peerCount).arg(m_peerSearch.infohash);
     emit searchChanged();
 }
 
@@ -625,9 +650,18 @@ void DhtController::applyItemSearch(const dht::ItemSearchResult &result)
 void DhtController::applyPublish(const dht::PublishResult &result)
 {
     switch (result.kind) {
-    case dht::PublishResult::Kind::Announce: m_publishStatus.kind = tr("Announce"); break;
-    case dht::PublishResult::Kind::Immutable: m_publishStatus.kind = tr("Immutable item"); break;
-    case dht::PublishResult::Kind::Mutable: m_publishStatus.kind = tr("Mutable item"); break;
+    case dht::PublishResult::Kind::Announce:
+        m_publishStatus.kind = tr("Announce");
+        m_publishStatus.kindId = QStringLiteral("announce");
+        break;
+    case dht::PublishResult::Kind::Immutable:
+        m_publishStatus.kind = tr("Immutable item");
+        m_publishStatus.kindId = QStringLiteral("immutable");
+        break;
+    case dht::PublishResult::Kind::Mutable:
+        m_publishStatus.kind = tr("Mutable item");
+        m_publishStatus.kindId = QStringLiteral("mutable");
+        break;
     }
     m_publishStatus.target = result.target.toHex();
     m_publishStatus.accepted = result.accepted;
@@ -640,7 +674,7 @@ void DhtController::applyPublish(const dht::PublishResult &result)
 
 void DhtController::clearSearch()
 {
-    m_peerResults.clear();
+    m_peerResults->clear();
     m_peerSearch = PeerSearchStatus{};
     m_itemSearch = ItemSearchStatus{};
     m_publishStatus = PublishStatus{};

@@ -804,7 +804,20 @@ void TestEngine::searchesAndPublishesAcrossASwarm()
     searcher.searchPeers(infohash);
     QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
     QCOMPARE(peers.infohash, infohash);
-    QVERIFY(containsEndpoint(peers.peers, Endpoint(QHostAddress(QHostAddress::LocalHost), 4242)));
+    const Endpoint announced(QHostAddress(QHostAddress::LocalHost), 4242);
+    QVERIFY(containsEndpoint(peers.peers, announced));
+
+    // Every peer is attributed to the node that returned it.
+    QVERIFY(!peers.sightings.empty());
+    bool attributed = false;
+    for (const PeerSighting &sighting : peers.sightings) {
+        QVERIFY(sighting.source.isValid());
+        QVERIFY(sighting.source.address.isLoopback());
+        QVERIFY(sighting.source.port != portOf(searcher));  // never the searcher itself
+        if (sighting.peer == announced)
+            attributed = true;
+    }
+    QVERIFY(attributed);
 
     // --- a target nobody has ----------------------------------------------------
     done = false;
