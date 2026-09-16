@@ -74,4 +74,12 @@ DecodedNodes decodeNodes(QByteArrayView data, Family family);
 // Decodes a get_peers "values" list, keeping entries of the given family.
 std::vector<Endpoint> decodePeers(const BValue *values, Family family);
 
+// Printable text for arbitrary bytes: readable characters as themselves,
+// anything else as \xNN.
+QString escapeBytes(QByteArrayView bytes);
+
+// A whole message, decoded for a human: every key, with compact node and
+// peer lists expanded into addresses and binary fields shown as hex.
+QString describe(const Message &message);
+
 } // namespace dht::krpc

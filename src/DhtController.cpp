@@ -3,7 +3,9 @@
 #include "dhtcore/Bep44.h"
 #include "dhtcore/DhtEngine.h"
 
+#include <QHostInfo>
 #include <QRegularExpression>
+#include <QTime>
 // Settings persistence is disabled; see DhtController::DhtController().
 // #include <QSettings>
 #include <QThread>
@@ -76,12 +78,14 @@ DhtController::DhtController(QObject *parent)
     , m_storedPeers(new StoredPeerModel(this))
     , m_storedItems(new StoredItemModel(this))
     , m_peerResults(new PeerResultModel(this))
+    , m_probeHistory(new ProbeHistoryModel(this))
 {
     qRegisterMetaType<dht::EngineSnapshot>();
     qRegisterMetaType<dht::StorageSnapshot>();
     qRegisterMetaType<dht::PeerSearchResult>();
     qRegisterMetaType<dht::ItemSearchResult>();
     qRegisterMetaType<dht::PublishResult>();
+    qRegisterMetaType<dht::ProbeResult>();
 
     // DHT Inspector is a standalone utility with no preconditions: every
     // launch starts from the defaults in DhtController.h and nothing is saved
@@ -260,6 +264,11 @@ void DhtController::startEngine()
             [this, generation](const dht::PublishResult &result) {
                 if (generation == m_generation)
                     applyPublish(result);
+            });
+    connect(m_engine, &dht::DhtEngine::probeFinished, this,
+            [this, generation](const dht::ProbeResult &result) {
+                if (generation == m_generation)
+                    applyProbe(result);
             });
     connect(m_engine, &dht::DhtEngine::storageSnapshotReady, this,
             [this, generation](const dht::StorageSnapshot &snapshot) {
@@ -672,6 +681,178 @@ void DhtController::applyPublish(const dht::PublishResult &result)
     emit publishChanged();
 }
 
+ProbeStatus DhtController::probe() const
+{
+    ProbeStatus out;
+    const ProbeExchange *exchange = m_probeHistory->at(m_selectedProbe);
+    if (!exchange)
+        return out;
+
+    const dht::ProbeResult &result = exchange->result;
+    out.valid = true;
+    out.method = QString::fromLatin1(result.method);
+    out.endpoint = result.endpoint.toString();
+    out.outcome = ProbeHistoryModel::outcomeOf(result);
+    out.summary = result.summary;
+    out.decoded = result.decoded;
+    out.request = dht::krpc::escapeBytes(result.request);
+    out.response = dht::krpc::escapeBytes(result.response);
+    out.rtt = result.rttMs >= 0 && !result.timedOut ? tr("%1 ms").arg(result.rttMs) : tr("—");
+    out.errorMessage = result.errorMessage;
+    out.time = exchange->time;
+    return out;
+}
+
+void DhtController::applyProbe(const dht::ProbeResult &result)
+{
+    ProbeExchange exchange;
+    exchange.result = result;
+    exchange.time = QTime::currentTime().toString(QStringLiteral("HH:mm:ss"));
+    m_probeHistory->prepend(exchange, 50);
+    m_selectedProbe = 0;
+    m_probeBusy = false;
+    emit probeChanged();
+}
+
+void DhtController::probeFailedLocally(const QString &method, const QString &where, const QString &message)
+{
+    // Keep refusals in the same history as real exchanges, so the record of
+    // what was asked stays complete.
+    dht::ProbeResult result;
+    result.method = method.toLatin1();
+    result.errorMessage = message;
+    result.summary = where.isEmpty() ? message : QStringLiteral("%1: %2").arg(where, message);
+    applyProbe(result);
+}
+
+void DhtController::probeEndpoint(const dht::Endpoint &endpoint, const QString &method, const QString &hashHex,
+                                  int announcePort, bool impliedPort, bool isAnnounce)
+{
+    if (!m_engine)
+        return;
+
+    const QByteArray methodBytes = method.trimmed().toLatin1();
+    const auto hash = dht::NodeId::fromHex(hashHex.trimmed());
+    const bool needsTarget = methodBytes == "find_node" || methodBytes == "get";
+    const bool needsInfohash = methodBytes == "get_peers" || isAnnounce;
+
+    if ((needsTarget || needsInfohash) && !hash) {
+        probeFailedLocally(method, endpoint.toString(), tr("needs a 40 hexadecimal digit hash"));
+        return;
+    }
+
+    m_probeBusy = true;
+    emit probeChanged();
+
+    if (isAnnounce) {
+        QMetaObject::invokeMethod(m_engine,
+                                  [engine = m_engine, endpoint, id = *hash,
+                                   port = quint16(std::clamp(announcePort, 1, 65535)), impliedPort] {
+                                      engine->probeAnnounce(endpoint, id, port, impliedPort);
+                                  },
+                                  Qt::QueuedConnection);
+        return;
+    }
+
+    dht::BValue::Dict args;
+    if (needsTarget)
+        args.emplace("target", dht::BValue(hash->toBytes()));
+    else if (needsInfohash)
+        args.emplace("info_hash", dht::BValue(hash->toBytes()));
+
+    QMetaObject::invokeMethod(
+        m_engine,
+        [engine = m_engine, endpoint, methodBytes, args = std::move(args)]() mutable {
+            engine->probe(endpoint, methodBytes, std::move(args));
+        },
+        Qt::QueuedConnection);
+}
+
+void DhtController::probeNode(const QString &address, const QString &method, const QString &hashHex)
+{
+    if (!m_engine || method.trimmed().isEmpty())
+        return;
+
+    QString error;
+    const auto parsed = dht::parseHostPort(address, &error);
+    if (!parsed) {
+        probeFailedLocally(method, address.trimmed(), error);
+        return;
+    }
+    if (!parsed->literal.isNull()) {
+        probeEndpoint(dht::Endpoint(parsed->literal, parsed->port), method, hashHex, 0, false, false);
+        return;
+    }
+
+    // A hostname: resolve it here, then ask the node itself.
+    m_probeBusy = true;
+    emit probeChanged();
+    QPointer<DhtController> self(this);
+    QHostInfo::lookupHost(parsed->host, this,
+                          [self, host = parsed->host, port = parsed->port, method, hashHex](const QHostInfo &info) {
+                              if (!self)
+                                  return;
+                              if (info.error() != QHostInfo::NoError || info.addresses().isEmpty()) {
+                                  self->probeFailedLocally(method, host,
+                                                           tr("could not resolve: %1").arg(info.errorString()));
+                                  return;
+                              }
+                              self->probeEndpoint(dht::Endpoint(info.addresses().constFirst(), port), method,
+                                                  hashHex, 0, false, false);
+                          });
+}
+
+void DhtController::probeAnnounce(const QString &address, const QString &infohashHex, int port, bool impliedPort)
+{
+    if (!m_engine)
+        return;
+    QString error;
+    const auto parsed = dht::parseHostPort(address, &error);
+    if (!parsed) {
+        probeFailedLocally(QStringLiteral("announce_peer"), address.trimmed(), error);
+        return;
+    }
+    if (!parsed->literal.isNull()) {
+        probeEndpoint(dht::Endpoint(parsed->literal, parsed->port), QStringLiteral("announce_peer"), infohashHex,
+                      port, impliedPort, true);
+        return;
+    }
+
+    m_probeBusy = true;
+    emit probeChanged();
+    QPointer<DhtController> self(this);
+    QHostInfo::lookupHost(parsed->host, this,
+                          [self, host = parsed->host, hostPort = parsed->port, infohashHex, port,
+                           impliedPort](const QHostInfo &info) {
+                              if (!self)
+                                  return;
+                              if (info.error() != QHostInfo::NoError || info.addresses().isEmpty()) {
+                                  self->probeFailedLocally(QStringLiteral("announce_peer"), host,
+                                                           tr("could not resolve: %1").arg(info.errorString()));
+                                  return;
+                              }
+                              self->probeEndpoint(dht::Endpoint(info.addresses().constFirst(), hostPort),
+                                                  QStringLiteral("announce_peer"), infohashHex, port, impliedPort,
+                                                  true);
+                          });
+}
+
+void DhtController::selectProbe(int row)
+{
+    if (row == m_selectedProbe || !m_probeHistory->at(row))
+        return;
+    m_selectedProbe = row;
+    emit probeChanged();
+}
+
+void DhtController::clearProbes()
+{
+    m_probeHistory->clear();
+    m_selectedProbe = -1;
+    m_probeBusy = false;
+    emit probeChanged();
+}
+
 void DhtController::clearSearch()
 {
     m_peerResults->clear();
@@ -683,6 +864,7 @@ void DhtController::clearSearch()
     m_searchStatus.clear();
     emit searchChanged();
     emit publishChanged();
+    clearProbes();
 }
 
 QStringList DhtController::bootstrapRouters() const

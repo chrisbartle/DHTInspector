@@ -24,6 +24,8 @@ private slots:
     void parseHostPort_data();
     void parseHostPort();
     void usableRemote();
+    void escapesBytes();
+    void describesAResponseInFull();
 };
 
 void TestKrpc::parsesSpecPing()
@@ -236,6 +238,47 @@ void TestKrpc::usableRemote()
     QVERIFY(isUsableRemote(ep("10.0.0.1", 6881), true));
     QVERIFY(!isUsableRemote(ep("127.0.0.1", 6881), false));
     QVERIFY(isUsableRemote(ep("127.0.0.1", 6881), true));
+}
+
+void TestKrpc::escapesBytes()
+{
+    QCOMPARE(krpc::escapeBytes("plain text"), QStringLiteral("plain text"));
+    QCOMPARE(krpc::escapeBytes(QByteArray("a\x00\x1f\x7f", 4)), QStringLiteral("a\\x00\\x1f\\x7f"));
+}
+
+void TestKrpc::describesAResponseInFull()
+{
+    const NodeId id = NodeId::random();
+    const Endpoint node(QHostAddress(QStringLiteral("67.215.246.10")), 6881);
+    const Endpoint peer(QHostAddress(QStringLiteral("203.0.113.9")), 51413);
+
+    BValue::Dict values;
+    values.emplace("id", BValue(id.toBytes()));
+    values.emplace("token", BValue(QByteArray::fromHex("aabbccdd")));
+    values.emplace("nodes", BValue(krpc::encodeNodes({{id, node}}, Family::IPv4)));
+    values.emplace("values", BValue(BValue::List{BValue(peer.toCompact())}));
+
+    const Endpoint requester(QHostAddress(QStringLiteral("198.51.100.7")), 1234);
+    const auto parsed = krpc::parse(krpc::encodeResponse("aa", std::move(values), QByteArray("DG\x00\x01", 4), requester));
+    QVERIFY(parsed.message);
+
+    const QString text = krpc::describe(*parsed.message);
+    QVERIFY2(text.contains(QStringLiteral("type: response")), qPrintable(text));
+    QVERIFY2(text.contains(id.toHex()), qPrintable(text));                       // id as hex
+    QVERIFY2(text.contains(QStringLiteral("aabbccdd")), qPrintable(text));       // token as hex
+    QVERIFY2(text.contains(node.toString()), qPrintable(text));                  // compact node expanded
+    QVERIFY2(text.contains(peer.toString()), qPrintable(text));                  // compact peer expanded
+    QVERIFY2(text.contains(requester.toString()), qPrintable(text));             // the ip field
+    QVERIFY2(text.contains(QStringLiteral("1 node(s)")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("1 peer(s)")), qPrintable(text));
+
+    // An error reply says so, with its code and text.
+    const auto failed = krpc::parse(krpc::encodeError("bb", 203, "invalid token", {}));
+    QVERIFY(failed.message);
+    const QString errorText = krpc::describe(*failed.message);
+    QVERIFY2(errorText.contains(QStringLiteral("type: error")), qPrintable(errorText));
+    QVERIFY2(errorText.contains(QStringLiteral("203")), qPrintable(errorText));
+    QVERIFY2(errorText.contains(QStringLiteral("invalid token")), qPrintable(errorText));
 }
 
 int runTestKrpc(int argc, char **argv)

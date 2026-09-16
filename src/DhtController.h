@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DataStoreModels.h"
+#include "ProbeModels.h"
 #include "SearchModels.h"
 #include "NodeListModel.h"
 #include "StatusTypes.h"
@@ -55,6 +56,10 @@ class DhtController : public QObject
     Q_PROPERTY(PeerSearchStatus peerSearch READ peerSearch NOTIFY searchChanged)
     Q_PROPERTY(ItemSearchStatus itemSearch READ itemSearch NOTIFY searchChanged)
     Q_PROPERTY(bool publishBusy READ publishBusy NOTIFY publishChanged)
+    Q_PROPERTY(ProbeHistoryModel *probeHistory READ probeHistory CONSTANT)
+    Q_PROPERTY(ProbeStatus probe READ probe NOTIFY probeChanged)
+    Q_PROPERTY(int selectedProbe READ selectedProbe NOTIFY probeChanged)
+    Q_PROPERTY(bool probeBusy READ probeBusy NOTIFY probeChanged)
     Q_PROPERTY(PublishStatus publishStatus READ publishStatus NOTIFY publishChanged)
 
     Q_PROPERTY(QString notice READ notice NOTIFY noticeChanged)
@@ -102,6 +107,10 @@ public:
     PeerSearchStatus peerSearch() const { return m_peerSearch; }
     ItemSearchStatus itemSearch() const { return m_itemSearch; }
     bool publishBusy() const { return m_publishBusy; }
+    ProbeHistoryModel *probeHistory() const { return m_probeHistory; }
+    ProbeStatus probe() const;
+    int selectedProbe() const { return m_selectedProbe; }
+    bool probeBusy() const { return m_probeBusy; }
     PublishStatus publishStatus() const { return m_publishStatus; }
 
     QString notice() const { return m_notice; }
@@ -136,6 +145,12 @@ public:
     Q_INVOKABLE QString immutableTargetFor(const QString &text) const;
     Q_INVOKABLE QString mutableTargetFor(const QString &publicKeyHex, const QString &salt) const;
 
+    // Probe tab: one query to one node, whatever the method.
+    Q_INVOKABLE void probeNode(const QString &address, const QString &method, const QString &hashHex);
+    Q_INVOKABLE void probeAnnounce(const QString &address, const QString &infohashHex, int port, bool impliedPort);
+    Q_INVOKABLE void selectProbe(int row);
+    Q_INVOKABLE void clearProbes();
+
 signals:
     void runningChanged();
     void statusChanged();
@@ -149,6 +164,7 @@ signals:
     void dataStoreChanged();
     void searchChanged();
     void publishChanged();
+    void probeChanged();
     void noticeChanged();
 
 private:
@@ -162,6 +178,10 @@ private:
     void applyPeerSearch(const dht::PeerSearchResult &result);
     void applyItemSearch(const dht::ItemSearchResult &result);
     void applyPublish(const dht::PublishResult &result);
+    void applyProbe(const dht::ProbeResult &result);
+    void probeEndpoint(const dht::Endpoint &endpoint, const QString &method, const QString &hashHex,
+                       int announcePort, bool impliedPort, bool isAnnounce);
+    void probeFailedLocally(const QString &method, const QString &where, const QString &message);
     void resetStatus();
     void setNotice(const QString &text, bool isError);
 
@@ -196,6 +216,10 @@ private:
     ItemSearchStatus m_itemSearch;
     bool m_publishBusy = false;
     PublishStatus m_publishStatus;
+
+    ProbeHistoryModel *m_probeHistory;
+    int m_selectedProbe = -1;
+    bool m_probeBusy = false;
 
     QString m_notice;
     bool m_noticeIsError = false;

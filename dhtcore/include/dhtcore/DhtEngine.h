@@ -68,6 +68,12 @@ public:
 
     // Searching and publishing for the Search tab. Each reports through the
     // matching signal when every address family has finished.
+    // Probe tab: one query, one node, the whole exchange reported back.
+    void probe(const Endpoint &endpoint, const QByteArray &method, BValue::Dict arguments);
+    // announce_peer needs a token, so this asks get_peers first and reports
+    // both exchanges.
+    void probeAnnounce(const Endpoint &endpoint, const NodeId &infohash, quint16 port, bool impliedPort);
+
     void searchPeers(const NodeId &infohash);
     void searchItem(const NodeId &target, const QByteArray &salt);
     void announcePeer(const NodeId &infohash, quint16 port, bool impliedPort);
@@ -93,6 +99,7 @@ signals:
     void peerSearchFinished(const dht::PeerSearchResult &result);
     void itemSearchFinished(const dht::ItemSearchResult &result);
     void publishFinished(const dht::PublishResult &result);
+    void probeFinished(const dht::ProbeResult &result);
     void notice(const QString &message, bool isError);
 
 private:

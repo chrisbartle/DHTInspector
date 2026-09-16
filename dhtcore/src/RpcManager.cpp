@@ -33,8 +33,9 @@ void RpcManager::query(const Endpoint &to, const QByteArray &method, BValue::Dic
 {
     const QByteArray tid = nextTransactionId();
     const qint64 now = nowMs();
-    m_pending.insert(tid, Pending{to, now, now + timeoutMs, std::move(callback)});
-    m_send(krpc::encodeQuery(tid, method, std::move(arguments), version), to);
+    const QByteArray datagram = krpc::encodeQuery(tid, method, std::move(arguments), version);
+    m_pending.insert(tid, Pending{to, datagram, now, now + timeoutMs, std::move(callback)});
+    m_send(datagram, to);
 }
 
 bool RpcManager::handleReply(const krpc::Message &message, const QByteArray &datagram, const Endpoint &from)
@@ -51,6 +52,7 @@ bool RpcManager::handleReply(const krpc::Message &message, const QByteArray &dat
                                                             : RpcReply::Status::Response;
     reply.message = message;
     reply.datagram = datagram;
+    reply.request = pending.request;
     reply.from = from;
     reply.rttMs = int(nowMs() - pending.sentAt);
     if (pending.callback)
@@ -80,6 +82,7 @@ void RpcManager::expire()
 
         RpcReply reply;
         reply.status = RpcReply::Status::Timeout;
+        reply.request = pending.request;
         reply.from = pending.to;
         if (pending.callback)
             pending.callback(reply);

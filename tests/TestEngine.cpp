@@ -108,6 +108,7 @@ private slots:
     void bep44PutAndGet();
     void bep44MutableItems();
     void searchesAndPublishesAcrossASwarm();
+    void probesASingleNode();
 };
 
 void TestEngine::swarmConvergesAndSharesPeers()
@@ -825,6 +826,59 @@ void TestEngine::searchesAndPublishesAcrossASwarm()
     QTRY_VERIFY_WITH_TIMEOUT(done, 10000);
     QVERIFY(!found.found);
     QVERIFY(found.queried > 0);
+}
+
+void TestEngine::probesASingleNode()
+{
+    auto engine = startEngine();
+    QVERIFY(engine);
+    auto target = startEngine();
+    QVERIFY(target);
+    const Endpoint targetEndpoint(QHostAddress(QHostAddress::LocalHost), portOf(*target));
+
+    std::vector<ProbeResult> results;
+    connect(engine.get(), &DhtEngine::probeFinished, this,
+            [&](const ProbeResult &result) { results.push_back(result); });
+
+    // ping
+    engine->probe(targetEndpoint, "ping", {});
+    QTRY_COMPARE_WITH_TIMEOUT(int(results.size()), 1, 5000);
+    QCOMPARE(results[0].method, QByteArray("ping"));
+    QCOMPARE(results[0].endpoint, targetEndpoint);
+    QVERIFY(!results[0].timedOut);
+    QVERIFY(!results[0].isError);
+    QVERIFY(!results[0].request.isEmpty());
+    QVERIFY(!results[0].response.isEmpty());
+    QVERIFY(results[0].rttMs >= 0);
+    QVERIFY2(results[0].decoded.contains(QStringLiteral("type: response")), qPrintable(results[0].decoded));
+    QVERIFY(results[0].decoded.contains(target->node(Family::IPv4)->id().toHex()));
+
+    // an unknown method comes back as an error, in full
+    results.clear();
+    engine->probe(targetEndpoint, "frobnicate", {});
+    QTRY_COMPARE_WITH_TIMEOUT(int(results.size()), 1, 5000);
+    QVERIFY(results[0].isError);
+    QCOMPARE(results[0].errorCode, qint64(krpc::MethodUnknown));
+    QVERIFY(results[0].decoded.contains(QStringLiteral("type: error")));
+
+    // a node that is not there times out, and says so
+    results.clear();
+    engine->probe(Endpoint(QHostAddress(QHostAddress::LocalHost), 1), "ping", {});
+    QTRY_COMPARE_WITH_TIMEOUT(int(results.size()), 1, 8000);
+    QVERIFY(results[0].timedOut);
+    QVERIFY(results[0].response.isEmpty());
+    QVERIFY(!results[0].request.isEmpty());
+
+    // announce chains get_peers for a token, and reports both exchanges
+    results.clear();
+    const NodeId infohash = NodeId::random();
+    engine->probeAnnounce(targetEndpoint, infohash, 6881, false);
+    QTRY_COMPARE_WITH_TIMEOUT(int(results.size()), 2, 8000);
+    QCOMPARE(results[0].method, QByteArray("get_peers"));
+    QVERIFY(!results[0].token.isEmpty());
+    QCOMPARE(results[1].method, QByteArray("announce_peer"));
+    QVERIFY(!results[1].isError);
+    QCOMPARE(target->storage().peerCount(), 1);
 }
 
 int runTestEngine(int argc, char **argv)

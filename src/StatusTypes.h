@@ -92,6 +92,36 @@ public:
     int activeLookups = 0;
 };
 
+class ProbeStatus
+{
+    Q_GADGET
+    QML_VALUE_TYPE(probeStatus)
+    Q_PROPERTY(bool valid MEMBER valid)
+    Q_PROPERTY(QString method MEMBER method)
+    Q_PROPERTY(QString endpoint MEMBER endpoint)
+    Q_PROPERTY(QString outcome MEMBER outcome)
+    Q_PROPERTY(QString summary MEMBER summary)
+    Q_PROPERTY(QString decoded MEMBER decoded)
+    Q_PROPERTY(QString request MEMBER request)
+    Q_PROPERTY(QString response MEMBER response)
+    Q_PROPERTY(QString rtt MEMBER rtt)
+    Q_PROPERTY(QString errorMessage MEMBER errorMessage)
+    Q_PROPERTY(QString time MEMBER time)
+
+public:
+    bool valid = false;
+    QString method;
+    QString endpoint;
+    QString outcome;
+    QString summary;
+    QString decoded;
+    QString request;
+    QString response;
+    QString rtt;
+    QString errorMessage;
+    QString time;
+};
+
 class PeerSearchStatus
 {
     Q_GADGET

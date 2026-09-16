@@ -21,7 +21,7 @@ Two jobs, one tool:
 | Search tab | Working: peer and item lookups, announce, BEP 44 publishing |
 | Data Store tab | Working: announced peers with addresses and expiry |
 | Global Health tab | Layout only |
-| Probe Node tab | Layout only |
+| Probe Node tab | Working: one node, any query, replies decoded in full |
 
 ### What the engine does
 

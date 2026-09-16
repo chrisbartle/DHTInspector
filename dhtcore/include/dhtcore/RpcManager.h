@@ -17,6 +17,7 @@ struct RpcReply
     Status status = Status::Timeout;
     krpc::Message message;  // empty on timeout
     QByteArray datagram;    // the bytes the message was parsed from
+    QByteArray request;     // the bytes we sent
     Endpoint from;
     int rttMs = -1;
 };
@@ -51,6 +52,7 @@ private:
     struct Pending
     {
         Endpoint to;
+        QByteArray request;
         qint64 sentAt = 0;
         qint64 deadline = 0;
         Callback callback;

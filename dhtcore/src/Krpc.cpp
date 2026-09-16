@@ -1,5 +1,7 @@
 #include "dhtcore/Krpc.h"
 
+#include <algorithm>
+
 namespace dht::krpc {
 
 std::optional<NodeId> Message::senderId() const
@@ -160,6 +162,137 @@ DecodedNodes decodeNodes(QByteArrayView data, Family family)
         const auto endpoint = Endpoint::fromCompact(data.sliced(offset + NodeId::Size, entry - NodeId::Size));
         if (id && endpoint)
             out.nodes.push_back({*id, *endpoint});
+    }
+    return out;
+}
+
+namespace {
+
+bool isPrintable(const QByteArray &bytes)
+{
+    return std::all_of(bytes.begin(), bytes.end(), [](char c) { return c >= 0x20 && c < 0x7f; });
+}
+
+QString indentOf(int depth)
+{
+    return QString(depth * 2, QLatin1Char(' '));
+}
+
+// Keys whose contents are compact addresses or hashes rather than text.
+QString describeValue(const BValue &value, const QByteArray &key, int depth);
+
+QString describeCompactNodes(const QByteArray &bytes, Family family, int depth)
+{
+    const DecodedNodes decoded = decodeNodes(bytes, family);
+    QString out = QStringLiteral("%1 node(s)%2\n")
+                      .arg(decoded.nodes.size())
+                      .arg(decoded.malformed ? QStringLiteral(", trailing bytes ignored") : QString());
+    for (const CompactNode &node : decoded.nodes)
+        out += indentOf(depth + 1) + node.id.toHex() + QStringLiteral("  ") + node.endpoint.toString() + QLatin1Char('\n');
+    return out;
+}
+
+QString describeValue(const BValue &value, const QByteArray &key, int depth)
+{
+    switch (value.type()) {
+    case BValue::Type::Integer:
+        return QString::number(value.toInteger()) + QLatin1Char('\n');
+    case BValue::Type::String: {
+        const QByteArray bytes = value.toString();
+        if (key == "nodes")
+            return describeCompactNodes(bytes, Family::IPv4, depth);
+        if (key == "nodes6")
+            return describeCompactNodes(bytes, Family::IPv6, depth);
+        if (key == "ip") {
+            if (const auto endpoint = Endpoint::fromCompact(bytes))
+                return endpoint->toString() + QLatin1Char('\n');
+        }
+        if (key == "id" || key == "target" || key == "info_hash" || key == "token" || key == "k"
+            || key == "sig" || key == "nonce") {
+            return QString::fromLatin1(bytes.toHex()) + QStringLiteral(" (%1 bytes)\n").arg(bytes.size());
+        }
+        if (isPrintable(bytes))
+            return QLatin1Char('"') + QString::fromLatin1(bytes) + QStringLiteral("\"\n");
+        return QString::fromLatin1(bytes.toHex()) + QStringLiteral(" (%1 bytes)\n").arg(bytes.size());
+    }
+    case BValue::Type::List: {
+        const BValue::List &items = value.toList();
+        if (key == "values") {
+            QString out = QStringLiteral("%1 peer(s)\n").arg(items.size());
+            for (const BValue &item : items) {
+                const QByteArray bytes = item.toString();
+                const auto endpoint = Endpoint::fromCompact(bytes);
+                out += indentOf(depth + 1)
+                       + (endpoint ? endpoint->toString() : escapeBytes(bytes)) + QLatin1Char('\n');
+            }
+            return out;
+        }
+        QString out = QStringLiteral("%1 item(s)\n").arg(items.size());
+        for (const BValue &item : items)
+            out += indentOf(depth + 1) + describeValue(item, {}, depth + 1);
+        return out;
+    }
+    case BValue::Type::Dict: {
+        QString out = QStringLiteral("\n");
+        for (const auto &[childKey, childValue] : value.toDict()) {
+            out += indentOf(depth + 1) + QString::fromLatin1(childKey) + QStringLiteral(": ")
+                   + describeValue(childValue, childKey, depth + 1);
+        }
+        return out;
+    }
+    case BValue::Type::PreEncoded:
+        return escapeBytes(value.toPreEncodedBytes()) + QLatin1Char('\n');
+    case BValue::Type::Invalid:
+        break;
+    }
+    return QStringLiteral("(empty)\n");
+}
+
+} // namespace
+
+QString escapeBytes(QByteArrayView bytes)
+{
+    QString out;
+    out.reserve(int(bytes.size()));
+    for (char c : bytes) {
+        if (c >= 0x20 && c < 0x7f)
+            out += QLatin1Char(c);
+        else
+            out += QStringLiteral("\\x%1").arg(quint8(c), 2, 16, QLatin1Char('0'));
+    }
+    return out;
+}
+
+QString describe(const Message &message)
+{
+    QString out;
+    out += QStringLiteral("transaction id: %1 (%2)\n")
+               .arg(escapeBytes(message.transactionId), QString::fromLatin1(message.transactionId.toHex()));
+    switch (message.type) {
+    case MessageType::Query:
+        out += QStringLiteral("type: query\nmethod: %1\n").arg(QString::fromLatin1(message.method));
+        break;
+    case MessageType::Response:
+        out += QStringLiteral("type: response\n");
+        break;
+    case MessageType::Error:
+        out += QStringLiteral("type: error\ncode: %1\nmessage: %2\n")
+                   .arg(message.errorCode)
+                   .arg(escapeBytes(message.errorMessage));
+        break;
+    }
+    if (!message.version.isEmpty()) {
+        out += QStringLiteral("version: %1 (%2)\n")
+                   .arg(escapeBytes(message.version), QString::fromLatin1(message.version.toHex()));
+    }
+    if (message.reportedAddress)
+        out += QStringLiteral("ip (how it sees us): %1\n").arg(message.reportedAddress->toString());
+    if (message.readOnly)
+        out += QStringLiteral("read-only: yes\n");
+
+    if (message.body.isDict()) {
+        out += message.type == MessageType::Query ? QStringLiteral("a:") : QStringLiteral("r:");
+        out += describeValue(message.body, {}, 0);
     }
     return out;
 }

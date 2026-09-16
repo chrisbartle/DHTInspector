@@ -263,6 +263,126 @@ void DhtEngine::announce(const NodeId &infohash, quint16 port, bool impliedPort,
         m_v6->announce(infohash, port, impliedPort, finishOne);
 }
 
+namespace {
+
+ProbeResult resultFrom(const Endpoint &endpoint, const QByteArray &method, const RpcReply &reply)
+{
+    ProbeResult out;
+    out.endpoint = endpoint;
+    out.method = method;
+    out.request = reply.request;
+    out.rttMs = reply.rttMs;
+
+    switch (reply.status) {
+    case RpcReply::Status::Timeout:
+        out.timedOut = true;
+        out.summary = QStringLiteral("no reply within the timeout");
+        return out;
+    case RpcReply::Status::Error:
+        out.isError = true;
+        out.errorCode = reply.message.errorCode;
+        out.errorMessage = QString::fromUtf8(reply.message.errorMessage);
+        break;
+    case RpcReply::Status::Response:
+        break;
+    }
+
+    out.response = reply.datagram;
+    out.decoded = krpc::describe(reply.message);
+    out.token = reply.message.body.stringAt("token").value_or(QByteArray());
+
+    if (out.isError) {
+        out.summary = QStringLiteral("error %1: %2").arg(out.errorCode).arg(out.errorMessage);
+        return out;
+    }
+
+    QStringList parts;
+    parts << QStringLiteral("%1 bytes in %2 ms").arg(out.response.size()).arg(out.rttMs);
+    if (const auto id = reply.message.senderId())
+        parts << QStringLiteral("id %1").arg(id->toHex().left(12) + QChar(0x2026));
+    if (!reply.message.version.isEmpty())
+        parts << QStringLiteral("version %1").arg(krpc::escapeBytes(reply.message.version));
+    const int v4 = int(krpc::decodeNodes(reply.message.body.stringAt("nodes").value_or(QByteArray()),
+                                         Family::IPv4).nodes.size());
+    const int v6 = int(krpc::decodeNodes(reply.message.body.stringAt("nodes6").value_or(QByteArray()),
+                                         Family::IPv6).nodes.size());
+    if (v4 + v6 > 0)
+        parts << QStringLiteral("%1 node(s)").arg(v4 + v6);
+    if (const BValue *values = reply.message.body.listAt("values"))
+        parts << QStringLiteral("%1 peer(s)").arg(values->toList().size());
+    if (!out.token.isEmpty())
+        parts << QStringLiteral("token %1").arg(QString::fromLatin1(out.token.toHex()));
+    out.summary = parts.join(QStringLiteral(", "));
+    return out;
+}
+
+} // namespace
+
+void DhtEngine::probe(const Endpoint &endpoint, const QByteArray &method, BValue::Dict arguments)
+{
+    DhtNode *node = this->node(endpoint.family());
+    if (!node) {
+        ProbeResult out;
+        out.endpoint = endpoint;
+        out.method = method;
+        out.errorMessage = QStringLiteral("%1 is not enabled, so %2 cannot be reached")
+                               .arg(familyName(endpoint.family()), endpoint.toString());
+        out.summary = out.errorMessage;
+        emit probeFinished(out);
+        return;
+    }
+
+    QPointer<DhtEngine> self(this);
+    node->probe(endpoint, method, std::move(arguments), [self, endpoint, method](const RpcReply &reply) {
+        if (self)
+            emit self->probeFinished(resultFrom(endpoint, method, reply));
+    });
+}
+
+void DhtEngine::probeAnnounce(const Endpoint &endpoint, const NodeId &infohash, quint16 port, bool impliedPort)
+{
+    DhtNode *node = this->node(endpoint.family());
+    if (!node) {
+        probe(endpoint, "announce_peer", {});  // reports the same "not enabled" result
+        return;
+    }
+
+    BValue::Dict getArgs;
+    getArgs.emplace("info_hash", BValue(infohash.toBytes()));
+
+    QPointer<DhtEngine> self(this);
+    node->probe(endpoint, "get_peers", std::move(getArgs),
+                [self, node, endpoint, infohash, port, impliedPort](const RpcReply &reply) {
+                    if (!self)
+                        return;
+                    const ProbeResult first = resultFrom(endpoint, "get_peers", reply);
+                    emit self->probeFinished(first);
+                    if (first.token.isEmpty()) {
+                        ProbeResult blocked;
+                        blocked.endpoint = endpoint;
+                        blocked.method = "announce_peer";
+                        blocked.errorMessage = first.timedOut
+                                                   ? QStringLiteral("no token: the node did not answer get_peers")
+                                                   : QStringLiteral("no token in the get_peers reply, cannot announce");
+                        blocked.summary = blocked.errorMessage;
+                        emit self->probeFinished(blocked);
+                        return;
+                    }
+
+                    BValue::Dict announceArgs;
+                    announceArgs.emplace("info_hash", BValue(infohash.toBytes()));
+                    announceArgs.emplace("port", BValue(qint64(port)));
+                    announceArgs.emplace("token", BValue(first.token));
+                    if (impliedPort)
+                        announceArgs.emplace("implied_port", BValue(1));
+                    node->probe(endpoint, "announce_peer", std::move(announceArgs),
+                                [self, endpoint](const RpcReply &announceReply) {
+                                    if (self)
+                                        emit self->probeFinished(resultFrom(endpoint, "announce_peer", announceReply));
+                                });
+                });
+}
+
 void DhtEngine::searchPeers(const NodeId &infohash)
 {
     struct State

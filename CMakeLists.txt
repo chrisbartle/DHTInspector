@@ -48,6 +48,7 @@ qt_add_qml_module(DHTInspector
         src/DhtController.h src/DhtController.cpp
         src/DataStoreModels.h src/DataStoreModels.cpp
         src/NodeListModel.h src/NodeListModel.cpp
+        src/ProbeModels.h src/ProbeModels.cpp
         src/SearchModels.h src/SearchModels.cpp
         src/StatusTypes.h
     QML_FILES

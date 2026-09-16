@@ -192,6 +192,23 @@ struct ItemSearchResult
     int responded = 0;
 };
 
+// One question put to one node, and everything that came back.
+struct ProbeResult
+{
+    Endpoint endpoint;
+    QByteArray method;
+    QByteArray request;   // datagram sent
+    QByteArray response;  // datagram received, empty when nothing came back
+    bool timedOut = false;
+    bool isError = false;  // the node answered with an error
+    qint64 errorCode = 0;
+    QString errorMessage;  // the node's error text, or why we could not ask
+    int rttMs = -1;
+    QString decoded;  // the whole response, decoded
+    QString summary;  // one line
+    QByteArray token;  // carried over for announce and put
+};
+
 // Announce and put both write to the nodes closest to a target.
 struct PublishResult
 {
@@ -211,4 +228,5 @@ Q_DECLARE_METATYPE(dht::EngineSnapshot)
 Q_DECLARE_METATYPE(dht::PeerSearchResult)
 Q_DECLARE_METATYPE(dht::ItemSearchResult)
 Q_DECLARE_METATYPE(dht::PublishResult)
+Q_DECLARE_METATYPE(dht::ProbeResult)
 Q_DECLARE_METATYPE(dht::StorageSnapshot)

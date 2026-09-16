@@ -69,6 +69,10 @@ public:
         std::optional<qint64> cas;
     };
 
+    // Sends one query to one endpoint and reports the whole exchange.
+    void probe(const Endpoint &endpoint, const QByteArray &method, BValue::Dict arguments,
+               std::function<void(const RpcReply &reply)> done);
+
     void findNode(const NodeId &target, Lookup::DoneFn done);
     void getPeers(const NodeId &infohash, Lookup::DoneFn done);
     void getItem(const NodeId &target, const QByteArray &salt, Lookup::DoneFn done);

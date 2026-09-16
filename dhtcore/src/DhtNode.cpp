@@ -565,6 +565,12 @@ Lookup *DhtNode::startLookup(Lookup::Kind kind, const NodeId &target, Lookup::Do
     return lookup;
 }
 
+void DhtNode::probe(const Endpoint &endpoint, const QByteArray &method, BValue::Dict arguments,
+                    std::function<void(const RpcReply &)> done)
+{
+    sendQuery(endpoint, method, std::move(arguments), std::move(done));
+}
+
 void DhtNode::findNode(const NodeId &target, Lookup::DoneFn done)
 {
     startLookup(Lookup::Kind::FindNode, target, std::move(done));
