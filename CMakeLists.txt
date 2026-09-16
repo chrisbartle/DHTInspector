@@ -57,6 +57,7 @@ qt_add_qml_module(DHTInspector
         qml/LabeledField.qml
         qml/Panel.qml
         qml/Badge.qml
+        qml/AddressLink.qml
         qml/ThemedButton.qml
         qml/ThemedSwitch.qml
         qml/ThemedTextField.qml

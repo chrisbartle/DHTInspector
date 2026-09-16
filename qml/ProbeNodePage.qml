@@ -101,6 +101,11 @@ ScrollView {
                     enabled: page.running && !DhtController.probeBusy
                     placeholderText: qsTr("address:port, e.g. 67.215.246.10:6881 or router.bittorrent.com:6881")
                     invalid: validation !== ""
+                    // Held by the controller so a link on another tab can set
+                    // it. textChanged rather than textEdited, so assistive
+                    // tools work; echoes from the controller compare equal.
+                    text: DhtController.probeAddress
+                    onTextChanged: if (text !== DhtController.probeAddress) DhtController.probeAddress = text
                 }
 
                 ThemedButton {

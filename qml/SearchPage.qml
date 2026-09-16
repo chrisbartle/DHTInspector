@@ -261,12 +261,21 @@ ScrollView {
                             spacing: Theme.spacingSmall
 
                             Cell { cellWidth: 200; text: peerRow.peer; font.family: Theme.monoFamily }
-                            Cell {
-                                text: peerRow.sourceCount > 1
-                                      ? qsTr("%1 and %2 more").arg(peerRow.firstSource).arg(peerRow.sourceCount - 1)
-                                      : peerRow.firstSource
-                                font.family: Theme.monoFamily
-                                color: Theme.textDim
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 4
+
+                                AddressLink { address: peerRow.firstSource }
+
+                                Label {
+                                    visible: peerRow.sourceCount > 1
+                                    text: qsTr("and %1 more").arg(peerRow.sourceCount - 1)
+                                    color: Theme.textDim
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    elide: Text.ElideRight
+                                }
+
+                                Item { Layout.fillWidth: true }
                             }
                             Cell {
                                 cellWidth: 70

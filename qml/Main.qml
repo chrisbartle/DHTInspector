@@ -7,6 +7,9 @@ import QtQuick.Layouts
 ApplicationWindow {
     id: root
 
+    readonly property var tabTitles: [qsTr("Setup"), qsTr("Search"), qsTr("Global Health"),
+                                      qsTr("Probe Node"), qsTr("Data Store")]
+
     width: 1120
     height: 740
     minimumWidth: 860
@@ -40,7 +43,7 @@ ApplicationWindow {
                 background: null
 
                 Repeater {
-                    model: [qsTr("Setup"), qsTr("Search"), qsTr("Global Health"), qsTr("Probe Node"), qsTr("Data Store")]
+                    model: root.tabTitles
 
                     delegate: TabButton {
                         id: tabButton
@@ -86,6 +89,16 @@ ApplicationWindow {
             anchors.bottom: parent.bottom
             height: 1
             color: Theme.border
+        }
+    }
+
+    // Clicking a node address anywhere in the UI aims the Probe tab at it and
+    // brings that tab forward.
+    Connections {
+        target: DhtController
+
+        function onProbeRequested() {
+            tabBar.currentIndex = root.tabTitles.indexOf(qsTr("Probe Node"))
         }
     }
 

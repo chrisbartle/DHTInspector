@@ -852,6 +852,22 @@ void DhtController::probeAnnounce(const QString &address, const QString &infohas
                           });
 }
 
+void DhtController::setProbeAddress(const QString &address)
+{
+    if (address == m_probeAddress)
+        return;
+    m_probeAddress = address;
+    emit probeAddressChanged();
+}
+
+void DhtController::openProbe(const QString &address)
+{
+    setProbeAddress(address);
+    // Emitted even when the address is unchanged: the point of the request is
+    // to bring the Probe tab forward.
+    emit probeRequested();
+}
+
 void DhtController::selectProbe(int row)
 {
     if (row == m_selectedProbe || !m_probeHistory->at(row))

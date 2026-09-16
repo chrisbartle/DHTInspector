@@ -480,12 +480,16 @@ ScrollView {
                     onClicked: DhtController.autoBootstrap()
                 }
 
-                Hint {
-                    text: DhtController.bootstrapRouters().join("   ")
-                    font.family: Theme.monoFamily
-                    elide: Text.ElideRight
-                    wrapMode: Text.NoWrap
+                Repeater {
+                    model: DhtController.bootstrapRouters()
+
+                    delegate: AddressLink {
+                        required property string modelData
+                        address: modelData
+                    }
                 }
+
+                Item { Layout.fillWidth: true }
             }
 
             Label {
@@ -503,7 +507,7 @@ ScrollView {
             Layout.fillWidth: true
             title: qsTr("Nodes")
             subtitle: page.running
-                      ? qsTr("%1 entries: routing table nodes plus bootstrap and injected endpoints not in the table.").arg(DhtController.nodes.count)
+                      ? qsTr("%1 entries: routing table nodes plus bootstrap and injected endpoints not in the table. Click an address to probe that node.").arg(DhtController.nodes.count)
                       : qsTr("Routing table contents appear here while the engine runs.")
 
             ColumnLayout {
@@ -574,7 +578,12 @@ ScrollView {
                             anchors.rightMargin: Theme.spacingSmall
                             spacing: Theme.spacingSmall
 
-                            Cell { cellWidth: page.columns[0].width; text: row.address; font.family: Theme.monoFamily; elide: Text.ElideMiddle }
+                            AddressLink {
+                                Layout.fillWidth: page.columns[0].width === 0
+                                Layout.preferredWidth: page.columns[0].width
+                                address: row.address
+                                elide: Text.ElideMiddle
+                            }
                             Cell { cellWidth: page.columns[1].width; text: row.nodeIdShort; font.family: Theme.monoFamily; color: Theme.textDim }
                             Cell { cellWidth: page.columns[2].width; text: row.status; color: Theme.nodeStatusColor(row.status) }
                             Cell { cellWidth: page.columns[3].width; text: row.rtt >= 0 ? qsTr("%1 ms").arg(row.rtt) : "—"; color: Theme.textDim }

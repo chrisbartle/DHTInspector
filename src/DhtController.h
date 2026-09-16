@@ -57,6 +57,7 @@ class DhtController : public QObject
     Q_PROPERTY(PeerSearchStatus peerSearch READ peerSearch NOTIFY searchChanged)
     Q_PROPERTY(ItemSearchStatus itemSearch READ itemSearch NOTIFY searchChanged)
     Q_PROPERTY(bool publishBusy READ publishBusy NOTIFY publishChanged)
+    Q_PROPERTY(QString probeAddress READ probeAddress WRITE setProbeAddress NOTIFY probeAddressChanged)
     Q_PROPERTY(ProbeHistoryModel *probeHistory READ probeHistory CONSTANT)
     Q_PROPERTY(ProbeStatus probe READ probe NOTIFY probeChanged)
     Q_PROPERTY(int selectedProbe READ selectedProbe NOTIFY probeChanged)
@@ -112,6 +113,10 @@ public:
     PeerSearchStatus peerSearch() const { return m_peerSearch; }
     ItemSearchStatus itemSearch() const { return m_itemSearch; }
     bool publishBusy() const { return m_publishBusy; }
+    // The address the Probe tab is aimed at. Held here rather than in the
+    // page so that a node address anywhere in the UI can load it.
+    QString probeAddress() const { return m_probeAddress; }
+    void setProbeAddress(const QString &address);
     ProbeHistoryModel *probeHistory() const { return m_probeHistory; }
     ProbeStatus probe() const;
     int selectedProbe() const { return m_selectedProbe; }
@@ -153,6 +158,8 @@ public:
     // Probe tab: one query to one node, whatever the method.
     Q_INVOKABLE void probeNode(const QString &address, const QString &method, const QString &hashHex);
     Q_INVOKABLE void probeAnnounce(const QString &address, const QString &infohashHex, int port, bool impliedPort);
+    // Aims the Probe tab at an address and asks the UI to show that tab.
+    Q_INVOKABLE void openProbe(const QString &address);
     Q_INVOKABLE void selectProbe(int row);
     Q_INVOKABLE void clearProbes();
 
@@ -171,6 +178,8 @@ signals:
     void searchChanged();
     void publishChanged();
     void probeChanged();
+    void probeAddressChanged();
+    void probeRequested();
     void noticeChanged();
 
 private:
@@ -224,6 +233,7 @@ private:
     bool m_publishBusy = false;
     PublishStatus m_publishStatus;
 
+    QString m_probeAddress;
     ProbeHistoryModel *m_probeHistory;
     int m_selectedProbe = -1;
     bool m_probeBusy = false;
