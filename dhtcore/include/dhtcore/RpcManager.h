@@ -53,6 +53,9 @@ public:
     // Returns false if the datagram could not be handed to the OS.
     using SendFn = std::function<bool(const QByteArray &datagram, const Endpoint &to)>;
     using Callback = std::function<void(const RpcReply &reply)>;
+    // Called when the query actually goes out, which may be well after it
+    // was handed over if the host's allowance was used up.
+    using SentFn = std::function<void()>;
 
     static constexpr int DefaultTimeoutMs = 3000;
     static constexpr int MaxQueuedTotal = 20000;
@@ -66,7 +69,8 @@ public:
     // any others for that host. The timeout starts when it is actually sent.
     // A refused query is reported as Throttled, never from inside this call.
     void query(const Endpoint &to, const QByteArray &method, BValue::Dict arguments,
-               const QByteArray &version, Callback callback, int timeoutMs = DefaultTimeoutMs);
+               const QByteArray &version, Callback callback, int timeoutMs = DefaultTimeoutMs,
+               SentFn onSent = {});
 
     // BEP 43: mark every outgoing query read-only. Queries already sent keep
     // whatever flag they carried.
@@ -102,6 +106,7 @@ private:
         QByteArray version;
         Callback callback;
         int timeoutMs = DefaultTimeoutMs;
+        SentFn onSent;
     };
 
     void send(Queued query);

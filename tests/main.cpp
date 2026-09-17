@@ -12,6 +12,7 @@ int runTestEngine(int argc, char **argv);
 int runTestHistory(int argc, char **argv);
 int runTestInbound(int argc, char **argv);
 int runTestKrpc(int argc, char **argv);
+int runTestLookup(int argc, char **argv);
 int runTestNetworkStats(int argc, char **argv);
 int runTestNodeCatalog(int argc, char **argv);
 int runTestNodeList(int argc, char **argv);
@@ -57,6 +58,7 @@ int main(int argc, char **argv)
     failures += runSuite(runTestHistory, "TestHistory", argc, argv);
     failures += runSuite(runTestInbound, "TestInbound", argc, argv);
     failures += runSuite(runTestKrpc, "TestKrpc", argc, argv);
+    failures += runSuite(runTestLookup, "TestLookup", argc, argv);
     failures += runSuite(runTestNetworkStats, "TestNetworkStats", argc, argv);
     failures += runSuite(runTestNodeCatalog, "TestNodeCatalog", argc, argv);
     failures += runSuite(runTestNodeList, "TestNodeList", argc, argv);

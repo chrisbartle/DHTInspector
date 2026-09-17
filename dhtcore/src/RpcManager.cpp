@@ -48,9 +48,9 @@ QByteArray RpcManager::nextTransactionId()
 }
 
 void RpcManager::query(const Endpoint &to, const QByteArray &method, BValue::Dict arguments,
-                       const QByteArray &version, Callback callback, int timeoutMs)
+                       const QByteArray &version, Callback callback, int timeoutMs, SentFn onSent)
 {
-    Queued q{to, method, std::move(arguments), version, std::move(callback), timeoutMs};
+    Queued q{to, method, std::move(arguments), version, std::move(callback), timeoutMs, std::move(onSent)};
     const qint64 now = nowMs();
 
     // Anything already waiting for this host goes first, so order is kept,
@@ -97,8 +97,11 @@ void RpcManager::send(Queued q)
     const qint64 now = nowMs();
     const QByteArray datagram = krpc::encodeQuery(tid, q.method, std::move(q.arguments), q.version, m_readOnly);
     m_pending.insert(tid, Pending{q.to, datagram, now, now + q.timeoutMs, std::move(q.callback)});
-    if (m_send(datagram, q.to))
+    if (m_send(datagram, q.to)) {
+        if (q.onSent)
+            q.onSent();
         return;
+    }
 
     // Never left the machine (typically a full socket buffer): waiting for
     // the timeout would record a healthy node as silent.

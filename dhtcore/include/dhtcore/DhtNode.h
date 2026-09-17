@@ -9,6 +9,8 @@
 #include <QHash>
 #include <QList>
 #include <QObject>
+
+#include <deque>
 #include <QPointer>
 #include <QTimer>
 
@@ -29,6 +31,9 @@ struct NodeConfig
     bool bep42 = true;                 // derived node IDs and "ip" in replies
     bool readOnly = false;             // BEP 43: query others, answer nobody
     HostLimit hostLimit;               // how fast we may query any one host
+    // Lookup pacing; 0 means "from the round trips seen so far".
+    int lookupSlowAfterMs = 0;
+    int lookupTimeoutMs = 0;
     std::optional<NodeId> nodeId;      // random when unset
     QByteArray version;                // KRPC "v" field
 };
@@ -141,7 +146,8 @@ private:
 
     bool sendDatagram(const QByteArray &data, const Endpoint &to);
     void sendQuery(const Endpoint &to, const QByteArray &method, BValue::Dict arguments,
-                   RpcManager::Callback callback, int timeoutMs = RpcManager::DefaultTimeoutMs);
+                   RpcManager::Callback callback, int timeoutMs = RpcManager::DefaultTimeoutMs,
+                   RpcManager::SentFn onSent = {});
     void sendResponse(const krpc::Message &query, const Endpoint &to, BValue::Dict values);
     void sendError(const QByteArray &transactionId, const Endpoint &to, int code, const QByteArray &message);
     bool budgetAllowsReply();
@@ -150,6 +156,9 @@ private:
     bool isRouter(const Endpoint &endpoint) const;
     void maybeVerify(const NodeId &id, const Endpoint &from, qint64 now);
     void adoptExternalAddress(const QHostAddress &address);
+    // Round trip that nearly every answer beats, in milliseconds, or -1
+    // until enough replies have come back.
+    int replyRttQuantile(double quantile) const;
     BValue::Dict nodesFor(const NodeId &target, const BValue &arguments) const;
 
     Lookup *startLookup(Lookup::Kind kind, const NodeId &target, Lookup::DoneFn done,
@@ -168,6 +177,8 @@ private:
     TokenManager m_tokens;
     ExternalIpVoter m_voter;
     RateLimiter m_limiter{20.0, 40.0};
+    // The latest round trips, for pacing lookups.
+    std::deque<int> m_replyRtts;
     QHash<Endpoint, Seed> m_seeds;
     QHash<Endpoint, qint64> m_recentVerifications;
     QPointer<Lookup> m_selfLookup;

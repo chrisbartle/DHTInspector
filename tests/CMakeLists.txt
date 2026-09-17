@@ -12,6 +12,7 @@ qt_add_executable(dhtcore_tests
     TestHistory.cpp
     TestInbound.cpp
     TestKrpc.cpp
+    TestLookup.cpp
     TestNetworkStats.cpp
     TestNodeCatalog.cpp
     TestNodeList.cpp

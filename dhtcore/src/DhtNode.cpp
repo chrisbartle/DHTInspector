@@ -138,7 +138,7 @@ bool DhtNode::sendDatagram(const QByteArray &data, const Endpoint &to)
 }
 
 void DhtNode::sendQuery(const Endpoint &to, const QByteArray &method, BValue::Dict arguments,
-                        RpcManager::Callback callback, int timeoutMs)
+                        RpcManager::Callback callback, int timeoutMs, RpcManager::SentFn onSent)
 {
     if (!m_rpc)
         return;
@@ -153,7 +153,7 @@ void DhtNode::sendQuery(const Endpoint &to, const QByteArray &method, BValue::Di
                      if (callback)
                          callback(reply);
                  },
-                 timeoutMs);
+                 timeoutMs, std::move(onSent));
 }
 
 bool DhtNode::budgetAllowsReply()
@@ -495,8 +495,25 @@ bool DhtNode::isRouter(const Endpoint &endpoint) const
     return it != m_seeds.constEnd() && it->source == SeedSource::Bootstrap;
 }
 
+int DhtNode::replyRttQuantile(double quantile) const
+{
+    constexpr size_t MinSamples = 32;
+    if (m_replyRtts.size() < MinSamples)
+        return -1;
+    std::vector<int> sorted(m_replyRtts.begin(), m_replyRtts.end());
+    const size_t index = std::min(sorted.size() - 1, size_t(quantile * double(sorted.size())));
+    std::nth_element(sorted.begin(), sorted.begin() + qsizetype(index), sorted.end());
+    return sorted[index];
+}
+
 void DhtNode::onRpcReply(const RpcReply &reply)
 {
+    constexpr size_t MaxRttSamples = 256;
+    if (reply.status == RpcReply::Status::Response && reply.rttMs >= 0) {
+        m_replyRtts.push_back(reply.rttMs);
+        while (m_replyRtts.size() > MaxRttSamples)
+            m_replyRtts.pop_front();
+    }
     const qint64 now = nowMs();
     switch (reply.status) {
     case RpcReply::Status::Timeout:
@@ -621,9 +638,10 @@ Lookup *DhtNode::startLookup(Lookup::Kind kind, const NodeId &target, Lookup::Do
     QPointer<DhtNode> self(this);
     auto *lookup = new Lookup(
         kind, target, m_config.family, m_id, m_config.allowLocalAddresses,
-        [self](const Endpoint &to, const QByteArray &method, BValue::Dict args, RpcManager::Callback callback) {
+        [self](const Endpoint &to, const QByteArray &method, BValue::Dict args, RpcManager::Callback callback,
+               int timeoutMs, RpcManager::SentFn onSent) {
             if (self)
-                self->sendQuery(to, method, std::move(args), std::move(callback));
+                self->sendQuery(to, method, std::move(args), std::move(callback), timeoutMs, std::move(onSent));
         },
         [self, done = std::move(done)](const Lookup::Result &result) {
             if (done)
@@ -633,6 +651,16 @@ Lookup *DhtNode::startLookup(Lookup::Kind kind, const NodeId &target, Lookup::Do
         },
         this);
     lookup->setSalt(salt);
+    // Nodes that answer at all nearly always answer quickly, so a lookup
+    // need not wait the full query timeout: twice the round trip that 95%
+    // of answers beat is enough, within bounds.
+    const int p95 = replyRttQuantile(0.95);
+    const int timeout = m_config.lookupTimeoutMs > 0    ? m_config.lookupTimeoutMs
+                        : p95 > 0                       ? std::clamp(2 * p95, 800, RpcManager::DefaultTimeoutMs)
+                                                        : Lookup::QueryTimeoutMs;
+    const int slow = m_config.lookupSlowAfterMs > 0 ? m_config.lookupSlowAfterMs
+                                                    : std::clamp(timeout / 2, 300, Lookup::SlowAfterMs);
+    lookup->setTimeouts(slow, timeout);
 
     for (const RoutingNode &node : m_table.closest(target, Lookup::K * 2))
         lookup->addCandidate(node.id, node.endpoint);

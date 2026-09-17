@@ -1,6 +1,7 @@
 #include "dhtcore/Lookup.h"
 
 #include "dhtcore/Bep44.h"
+#include "dhtcore/Support.h"
 
 #include <QPointer>
 
@@ -19,6 +20,14 @@ Lookup::Lookup(Kind kind, const NodeId &target, Family family, const NodeId &sel
     , m_query(std::move(query))
     , m_onDone(std::move(done))
 {
+    m_slowTimer.setInterval(SlowCheckMs);
+    connect(&m_slowTimer, &QTimer::timeout, this, &Lookup::checkSlow);
+}
+
+void Lookup::setTimeouts(int slowAfterMs, int queryTimeoutMs)
+{
+    m_queryTimeoutMs = std::max(100, queryTimeoutMs);
+    m_slowAfterMs = std::clamp(slowAfterMs, 100, m_queryTimeoutMs);
 }
 
 void Lookup::addCandidate(const NodeId &id, const Endpoint &endpoint, int hops)
@@ -68,7 +77,7 @@ void Lookup::step()
     // Pick what to send first; sending can call back synchronously and
     // mutate m_candidates.
     std::vector<Endpoint> toSend;
-    int budget = Alpha - m_inFlight;
+    int budget = std::min(Alpha - m_inFlight, MaxOutstanding - m_outstanding);
     int respondedAhead = 0;
     for (Candidate &c : m_candidates) {
         if (budget <= 0 || respondedAhead >= K)
@@ -77,7 +86,9 @@ void Lookup::step()
             ++respondedAhead;
         } else if (c.state == State::New && m_queries < MaxQueries) {
             c.state = State::InFlight;
+            c.sentAtMs = 0;  // its clock starts when it actually goes out
             ++m_inFlight;
+            ++m_outstanding;
             ++m_queries;
             --budget;
             toSend.push_back(c.endpoint);
@@ -90,14 +101,78 @@ void Lookup::step()
         BValue::Dict args;
         args.emplace(key, m_target.toBytes());
         QPointer<Lookup> self(this);
-        m_query(endpoint, method, std::move(args), [self, endpoint](const RpcReply &reply) {
-            if (self)
-                self->onReply(endpoint, reply);
-        });
+        m_query(
+            endpoint, method, std::move(args),
+            [self, endpoint](const RpcReply &reply) {
+                if (self)
+                    self->onReply(endpoint, reply);
+            },
+            m_queryTimeoutMs, [self, endpoint] {
+                if (self)
+                    self->onSent(endpoint);
+            });
     }
 
-    if (!m_finished && m_inFlight == 0)
+    if (m_finished)
+        return;
+    if (m_outstanding > 0 && !m_slowTimer.isActive())
+        m_slowTimer.start();
+    if (canFinish())
         finish();
+}
+
+bool Lookup::canFinish() const
+{
+    // Candidates are sorted by distance, so the first K responders are the
+    // closest ones found. Anything still outstanding ahead of them could
+    // yet turn out closer.
+    int responded = 0;
+    for (const Candidate &c : m_candidates) {
+        if (responded >= K)
+            break;
+        if (c.state == State::Responded)
+            ++responded;
+        else if (c.state == State::InFlight || c.state == State::Slow)
+            return false;
+    }
+    if (responded >= K)
+        return true;
+    if (m_outstanding > 0)
+        return false;
+    // Fewer than K answered: only done once there is nothing left to ask.
+    if (m_queries >= MaxQueries)
+        return true;
+    return std::none_of(m_candidates.begin(), m_candidates.end(),
+                        [](const Candidate &c) { return c.state == State::New; });
+}
+
+void Lookup::onSent(const Endpoint &endpoint)
+{
+    const auto it = std::find_if(m_candidates.begin(), m_candidates.end(),
+                                 [&](const Candidate &c) { return c.endpoint == endpoint; });
+    if (it != m_candidates.end() && it->state == State::InFlight)
+        it->sentAtMs = nowMs();
+}
+
+void Lookup::checkSlow()
+{
+    if (m_finished)
+        return;
+    const qint64 now = nowMs();
+    bool promoted = false;
+    for (Candidate &c : m_candidates) {
+        // A query still waiting its turn under the per-host limit has not
+        // had its chance yet, so it is never counted slow.
+        if (c.state == State::InFlight && c.sentAtMs > 0 && now - c.sentAtMs >= m_slowAfterMs) {
+            c.state = State::Slow;
+            --m_inFlight;
+            promoted = true;
+        }
+    }
+    if (m_inFlight == 0)
+        m_slowTimer.stop();
+    if (promoted)
+        step();
 }
 
 void Lookup::onReply(const Endpoint &endpoint, const RpcReply &reply)
@@ -107,9 +182,11 @@ void Lookup::onReply(const Endpoint &endpoint, const RpcReply &reply)
 
     const auto it = std::find_if(m_candidates.begin(), m_candidates.end(),
                                  [&](const Candidate &c) { return c.endpoint == endpoint; });
-    if (it == m_candidates.end() || it->state != State::InFlight)
+    if (it == m_candidates.end() || (it->state != State::InFlight && it->state != State::Slow))
         return;
-    --m_inFlight;
+    if (it->state == State::InFlight)
+        --m_inFlight;
+    --m_outstanding;
 
     if (reply.status != RpcReply::Status::Response) {
         it->state = State::Failed;
@@ -197,6 +274,7 @@ void Lookup::collectItem(const RpcReply &reply)
 void Lookup::finish()
 {
     m_finished = true;
+    m_slowTimer.stop();
 
     Result result;
     result.kind = m_kind;

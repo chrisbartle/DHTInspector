@@ -1246,7 +1246,9 @@ void TestEngine::monitoringDiscoversTheWholeSwarm()
     QVERIFY(lookups.medianMs >= 0 && lookups.p90Ms >= lookups.medianMs);
     QVERIFY(lookups.medianQueries > 0);
     QVERIFY(lookups.medianHops >= 0);
-    QVERIFY(lookups.responseRate > 0.9);  // everyone answers on loopback
+    // Not 1.0: a lookup stops as soon as the closest have answered, so
+    // queries still outstanding at that point never count as answered.
+    QVERIFY(lookups.responseRate > 0.5);
     QVERIFY(lookups.fullShare > 0);  // early ones ran with few nodes known
     QCOMPARE(monitor->snapshot().crawl.lookupV6.samples, 0);
 
@@ -1474,9 +1476,11 @@ void TestEngine::monitoringDoesNotQueueBehindABusyHost()
         mostQueued = std::max(mostQueued, monitor->node(Family::IPv4)->rpcQueued());
         QTest::qWait(20);
     }
-    // The crawler's own share stays at MaxQueuedPerHost; an ordinary lookup
-    // may add its three. Without the limit this reaches the dozens.
-    QVERIFY2(mostQueued <= Crawler::MaxQueuedPerHost + Lookup::Alpha, qPrintable(QString::number(mostQueued)));
+    // The crawler's own share stays at MaxQueuedPerHost; a lookup may add
+    // its outstanding queries, which are capped too. Without the limits
+    // this reaches the dozens.
+    QVERIFY2(mostQueued <= Crawler::MaxQueuedPerHost + Lookup::MaxOutstanding,
+             qPrintable(QString::number(mostQueued)));
     QVERIFY(catalogCount(*monitor, CatalogEntry::State::Responsive) >= 8);  // about two a second
     QCOMPARE(monitor->snapshot().crawl.notSent, qint64(0));
     QVERIFY(answered > 0);
