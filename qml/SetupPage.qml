@@ -452,7 +452,7 @@ ScrollView {
                     color: DhtController.portMapping.state === "failed" ? Theme.bad : Theme.textFaint
                     text: {
                         if (!DhtController.portForwarding)
-                            return qsTr("Asks the gateway to forward the port (PCP, falling back to NAT-PMP)")
+                            return qsTr("Asks the gateway to forward the port (PCP, then NAT-PMP, then UPnP)")
                         if (!page.running)
                             return qsTr("Mapping starts with the engine")
                         const m = DhtController.portMapping

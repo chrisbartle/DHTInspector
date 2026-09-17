@@ -13,6 +13,7 @@
 #include <QUdpSocket>
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <memory>
 #include <optional>
@@ -102,6 +103,7 @@ EngineConfig monitorConfig()
     config.crawl.retryDelayMs = 200;
     config.crawl.revisitIntervalMs = 800;
     config.crawl.silentRevisitIntervalMs = 800;
+    config.crawl.historyIntervalMs = 400;
     return config;
 }
 
@@ -1234,10 +1236,45 @@ void TestEngine::monitoringDiscoversTheWholeSwarm()
     QVERIFY(std::any_of(inbound.methods.begin(), inbound.methods.end(),
                         [](const auto &m) { return m.first == QLatin1String("ping"); }));
 
-    // And lookups for random IDs start producing size estimates.
+    // And lookups for random IDs start producing size estimates, and a
+    // measure of how lookups perform.
     QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.sizeV4.samples > 0, 15000);
     QVERIFY(monitor->snapshot().crawl.sizeV4.median > 0);
     QCOMPARE(monitor->snapshot().crawl.sizeV6.samples, 0);
+    const LookupPerformance lookups = monitor->snapshot().crawl.lookupV4;
+    QVERIFY(lookups.samples > 0);
+    QVERIFY(lookups.medianMs >= 0 && lookups.p90Ms >= lookups.medianMs);
+    QVERIFY(lookups.medianQueries > 0);
+    QVERIFY(lookups.medianHops >= 0);
+    QVERIFY(lookups.responseRate > 0.9);  // everyone answers on loopback
+    QVERIFY(lookups.fullShare > 0);  // early ones ran with few nodes known
+    QCOMPARE(monitor->snapshot().crawl.lookupV6.samples, 0);
+
+    // The history samples while scanning, and a pause leaves a gap.
+    QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.history && monitor->snapshot().crawl.history->size() >= 3,
+                             10000);
+    auto history = monitor->snapshot().crawl.history;
+    const HistorySample latest = history->back();
+    QCOMPARE(latest.value(Metric::AnsweringIps), double(N));
+    QCOMPARE(latest.value(Metric::Bep51Share), 1.0);
+    QVERIFY(latest.value(Metric::QueriesPerSecond) >= 0);
+    QVERIFY(latest.value(Metric::SizeEstimate) > 0);
+    QVERIFY(latest.value(Metric::LookupMedianMs) >= 0);
+    QVERIFY(std::isnan(latest.value(Metric::RttMedianMs)) || latest.value(Metric::RttMedianMs) >= 0);
+    QCOMPARE(int(latest.clientShares.size()), 1);
+    QCOMPARE(latest.clientShares[0].second, 1.0);
+    QVERIFY(history->front().gapBefore);
+    for (size_t i = 1; i < history->size(); ++i) {
+        QVERIFY(!(*history)[i].gapBefore);
+        QVERIFY((*history)[i].atMs > (*history)[i - 1].atMs);
+    }
+    monitor->setMonitoring(false);
+    const size_t paused = monitor->snapshot().crawl.history->size();
+    QTest::qWait(1200);
+    QCOMPARE(monitor->snapshot().crawl.history->size(), paused);  // nothing while paused
+    monitor->setMonitoring(true);
+    QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.history->size() > paused, 10000);
+    QVERIFY((*monitor->snapshot().crawl.history)[paused].gapBefore);
 }
 
 void TestEngine::monitoringMarksSilentAndGoneNodes()
@@ -1297,6 +1334,44 @@ void TestEngine::monitoringMarksSilentAndGoneNodes()
     }
     QCOMPARE(catalogCount(*monitor, CatalogEntry::State::Responsive), N + 1 - 2);
     QVERIFY(monitor->snapshot().crawl.timeouts >= 6);
+
+    // Churn: two addresses stopped within the hour, after short spells.
+    const auto churn = [&] { return monitor->snapshot().crawl.stats->ipv4.churn; };
+    QTRY_COMPARE_WITH_TIMEOUT(churn().departedLastHour, 2, 10000);
+    QCOMPARE(churn().sessionBins[0], 2);
+    QVERIFY(churn().medianSessionMs >= 0);
+    QCOMPARE(churn().returnedLastHour, 0);
+    // Everyone answering came up within the last ten minutes, nobody an
+    // hour ago.
+    QCOMPARE(churn().uptimeBins[0], monitor->snapshot().crawl.stats->ipv4.answeringIps);
+    QCOMPARE(churn().survivalBase[0], 0);
+
+    // One comes back on the same address and port: a return, not an arrival.
+    EngineConfig again = loopbackConfig();
+    again.bindAddressV4 = stoppedA.address;
+    again.port = stoppedA.port;
+    chain[1] = startEngineWith(again);
+    QVERIFY(chain[1]);
+    const auto slotA = monitor->catalog().find(stoppedA);
+    QTRY_COMPARE_WITH_TIMEOUT(monitor->catalog().at(slotA).state, CatalogEntry::State::Responsive, 15000);
+    QVERIFY(monitor->catalog().at(slotA).has(CatalogEntry::Rejoined));
+    QTRY_COMPARE_WITH_TIMEOUT(churn().returnedLastHour, 1, 10000);
+    QCOMPARE(churn().departedLastHour, 1);
+    // Nodes that were never away are not returns.
+    const auto slotLive = monitor->catalog().find(endpointOf(*chain[0]));
+    QVERIFY(!monitor->catalog().at(slotLive).has(CatalogEntry::Rejoined));
+
+    // The history saw it all, with a sample every few hundred milliseconds.
+    const auto history = monitor->snapshot().crawl.history;
+    QVERIFY(history && history->size() >= 5);
+    QVERIFY(history->front().gapBefore);
+    double mostDeparted = 0;
+    for (const HistorySample &s : *history) {
+        QVERIFY(s.spanMs > 0);
+        if (!std::isnan(s.value(Metric::DepartedPerHour)))
+            mostDeparted = std::max(mostDeparted, s.value(Metric::DepartedPerHour));
+    }
+    QCOMPARE(mostDeparted, 2.0);
 }
 
 void TestEngine::monitoringPausesAndHonoursTheCap()

@@ -37,6 +37,8 @@ struct CrawlConfig
     // MaxEstimates running; 0 turns them off. Lookups on the real network
     // take seconds, so several run at once to gather samples quickly.
     qint64 sizeEstimateIntervalMs = 1000;
+    // How often the history takes a sample while scanning.
+    qint64 historyIntervalMs = 30 * 1000;
     bool allowLocalAddresses = false;
 };
 
@@ -109,7 +111,8 @@ private:
     void widen();
     void refreshStats(qint64 now);
     void estimateSize();
-    void recordLookup(Family family, const NodeId &target, const std::vector<Lookup::Contact> &closest);
+    void recordLookup(Family family, const Lookup::Result &result);
+    void sampleHistory(qint64 now);
     DhtNode *nodeFor(Family family) const;
     bool isOwnId(const NodeId &id) const;
     bool backlogged() const;
@@ -138,6 +141,20 @@ private:
     std::array<bool, 2> m_widening{};  // per family: a widening lookup is running
     std::array<int, 2> m_estimating{};  // per family: size lookups running
     std::array<SizeEstimator, 2> m_size;
+    std::array<LookupTracker, 2> m_lookups;
+    History m_history;
+    std::shared_ptr<const std::vector<HistorySample>> m_historyView;
+    qint64 m_nextHistoryMs = 0;
+    qint64 m_lastHistoryMs = -1;
+    struct Counters
+    {
+        qint64 atMs = 0;
+        qint64 queries = 0;
+        qint64 answers = 0;
+        qint64 features = 0;
+        qint64 inbound = 0;
+    };
+    Counters m_historyCounters;
     std::shared_ptr<const NetworkStatsSet> m_stats;
     qint64 m_nextStatsMs = 0;
     qint64 m_nextEstimateMs = 0;

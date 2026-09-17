@@ -9,6 +9,7 @@ int runTestBep44(int argc, char **argv);
 int runTestCensus(int argc, char **argv);
 int runTestClientVersion(int argc, char **argv);
 int runTestEngine(int argc, char **argv);
+int runTestHistory(int argc, char **argv);
 int runTestInbound(int argc, char **argv);
 int runTestKrpc(int argc, char **argv);
 int runTestNetworkStats(int argc, char **argv);
@@ -53,6 +54,7 @@ int main(int argc, char **argv)
     failures += runSuite(runTestBep44, "TestBep44", argc, argv);
     failures += runSuite(runTestCensus, "TestCensus", argc, argv);
     failures += runSuite(runTestClientVersion, "TestClientVersion", argc, argv);
+    failures += runSuite(runTestHistory, "TestHistory", argc, argv);
     failures += runSuite(runTestInbound, "TestInbound", argc, argv);
     failures += runSuite(runTestKrpc, "TestKrpc", argc, argv);
     failures += runSuite(runTestNetworkStats, "TestNetworkStats", argc, argv);

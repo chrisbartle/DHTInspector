@@ -21,6 +21,12 @@ QtObject {
     readonly property color warn:        "#d9a441"
     readonly property color bad:         "#f0523f"
 
+    // Chart series, in this order and never cycled: categorical slots 1-6
+    // of the reference data-viz palette, dark steps, checked against the
+    // surface colour for colour-vision separation and contrast.
+    readonly property var series: ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300"]
+    readonly property color chartGrid: "#2c323b"
+
     // Metrics
     readonly property int spacingSmall:  6
     readonly property int spacing:       12

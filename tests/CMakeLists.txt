@@ -9,6 +9,7 @@ qt_add_executable(dhtcore_tests
     TestCensus.cpp
     TestClientVersion.cpp
     TestEngine.cpp
+    TestHistory.cpp
     TestInbound.cpp
     TestKrpc.cpp
     TestNetworkStats.cpp

@@ -40,7 +40,7 @@ struct CatalogEntry
     quint32 lastListed = 0;
     quint32 lastQueried = 0;
     quint32 lastAnswered = 0;
-    quint32 answeringSince = 0;  // start of the current responsive spell
+    quint32 answeringSince = 0;  // start of the current (or, once gone, the last) responsive spell
     quint32 flags = 0;           // Flag bits, feature check tries, BEP 51 sample count
 
     static constexpr quint16 NoRtt = 0xffff;
@@ -63,10 +63,11 @@ struct CatalogEntry
         ListsBogons = 1u << 11,    // listed private or invalid addresses
         FeatureQueued = 1u << 12,
         AnswersError = 1u << 15,
+        Rejoined = 1u << 16,       // answering again after it had stopped (gone)
     };
     static constexpr int TriesShift = 13;       // 2 bits: feature check attempts
-    static constexpr int SampleCountShift = 16; // 16 bits: BEP 51 "num", saturating
-    static constexpr quint32 MaxSampleCount = (1u << 16) - 1;
+    static constexpr int SampleCountShift = 17; // 15 bits: BEP 51 "num", saturating
+    static constexpr quint32 MaxSampleCount = (1u << 15) - 1;
 
     bool has(Flag f) const { return flags & f; }
     void set(Flag f, bool on = true) { flags = on ? (flags | f) : (flags & ~quint32(f)); }

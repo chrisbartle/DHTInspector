@@ -12,8 +12,11 @@ class QUdpSocket;
 
 namespace dht {
 
+class UpnpIgd;
+
 // Maps the DHT's UDP port on the IPv4 gateway. Tries PCP (RFC 6887) first,
-// falls back to NAT-PMP (RFC 6886), and renews at half the granted lifetime.
+// then NAT-PMP (RFC 6886), then UPnP IGD, and renews at half the granted
+// lifetime.
 class PortMapper : public QObject
 {
     Q_OBJECT
@@ -21,6 +24,8 @@ class PortMapper : public QObject
 public:
     static constexpr quint32 RequestedLifetime = 3600;
     static constexpr quint16 GatewayPort = 5351;
+    // How long stopping may wait for a UPnP gateway to drop the mapping.
+    static constexpr int UpnpReleaseTimeoutMs = 1500;
 
     explicit PortMapper(QObject *parent = nullptr);
     ~PortMapper() override;
@@ -34,15 +39,19 @@ public:
     // Test hooks: talk to a fake gateway and shorten the retry schedule.
     void setGatewayOverride(const QHostAddress &address, quint16 port);
     void setRetryDelays(const QList<int> &delaysMs);
+    void setUpnpSearchTarget(const QHostAddress &address, quint16 port);
+    void setUpnpSearchDelays(const QList<int> &delaysMs);
 
 signals:
     void changed();
 
 private:
-    enum class Protocol { Pcp, NatPmp };
+    enum class Protocol { Pcp, NatPmp, Upnp };
 
     void stopInternal(bool notify);
     void beginProtocol(Protocol protocol);
+    // Moves on to the next protocol, or fails with every reason so far.
+    void fallBack(const QString &reason);
     void sendRequest();
     void onRetryTimeout();
     void onReadyRead();
@@ -71,6 +80,8 @@ private:
     quint16 m_gatewayPort = GatewayPort;
     QHostAddress m_localAddress;
     QByteArray m_nonce;
+    UpnpIgd *m_upnp = nullptr;
+    QStringList m_reasons;
     bool m_active = false;
 };
 

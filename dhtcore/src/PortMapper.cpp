@@ -2,6 +2,7 @@
 
 #include "dhtcore/Endpoint.h"
 #include "dhtcore/Gateway.h"
+#include "dhtcore/Upnp.h"
 
 #include <QNetworkDatagram>
 #include <QRandomGenerator>
@@ -22,8 +23,28 @@ PortMapper::PortMapper(QObject *parent)
     m_renewTimer.setSingleShot(true);
     connect(&m_retryTimer, &QTimer::timeout, this, &PortMapper::onRetryTimeout);
     connect(&m_renewTimer, &QTimer::timeout, this, [this] {
+        if (m_protocol == Protocol::Upnp) {
+            m_upnp->renew();
+            return;
+        }
         m_attempt = 0;
         sendRequest();
+    });
+
+    m_upnp = new UpnpIgd(this);
+    connect(m_upnp, &UpnpIgd::progress, this, [this](const QString &message) {
+        if (m_protocol != Protocol::Upnp || m_snapshot.state == PortMappingSnapshot::State::Mapped)
+            return;
+        m_snapshot.message = message;
+        emit changed();
+    });
+    connect(m_upnp, &UpnpIgd::mapped, this, [this](quint16 port, quint32 lease, const QHostAddress &external) {
+        if (m_protocol == Protocol::Upnp)
+            mapped(port, lease, external);
+    });
+    connect(m_upnp, &UpnpIgd::failed, this, [this](const QString &message) {
+        if (m_protocol == Protocol::Upnp)
+            fallBack(message);
     });
 }
 
@@ -44,9 +65,24 @@ void PortMapper::setRetryDelays(const QList<int> &delaysMs)
         m_retryDelays = delaysMs;
 }
 
+void PortMapper::setUpnpSearchTarget(const QHostAddress &address, quint16 port)
+{
+    m_upnp->setSearchTarget(address, port);
+}
+
+void PortMapper::setUpnpSearchDelays(const QList<int> &delaysMs)
+{
+    m_upnp->setSearchDelays(delaysMs);
+}
+
 QString PortMapper::protocolName() const
 {
-    return m_protocol == Protocol::Pcp ? QStringLiteral("PCP") : QStringLiteral("NAT-PMP");
+    switch (m_protocol) {
+    case Protocol::Pcp: return QStringLiteral("PCP");
+    case Protocol::NatPmp: return QStringLiteral("NAT-PMP");
+    case Protocol::Upnp: return QStringLiteral("UPnP IGD");
+    }
+    return QString();
 }
 
 void PortMapper::start(quint16 internalPort)
@@ -55,6 +91,7 @@ void PortMapper::start(quint16 internalPort)
     m_active = true;
     m_snapshot = PortMappingSnapshot{};
     m_snapshot.internalPort = internalPort;
+    m_reasons.clear();
 
     const bool overridden = !m_gatewayOverride.isNull();
     m_gateway = overridden ? m_gatewayOverride : defaultGatewayIpv4();
@@ -94,12 +131,17 @@ void PortMapper::stop()
 
 void PortMapper::stopInternal(bool notify)
 {
-    if (m_socket && m_snapshot.state == PortMappingSnapshot::State::Mapped) {
-        // Best effort: ask the gateway to drop the mapping now rather than
-        // leaving it to expire.
-        const QByteArray release = m_protocol == Protocol::Pcp ? buildPcpMap(0) : buildNatPmpMap(0);
-        m_socket->writeDatagram(release, m_gateway, m_gatewayPort);
+    // Best effort: ask the gateway to drop the mapping now rather than
+    // leaving it to expire.
+    if (m_snapshot.state == PortMappingSnapshot::State::Mapped) {
+        if (m_protocol == Protocol::Upnp) {
+            m_upnp->releaseBlocking(UpnpReleaseTimeoutMs);
+        } else if (m_socket) {
+            const QByteArray release = m_protocol == Protocol::Pcp ? buildPcpMap(0) : buildNatPmpMap(0);
+            m_socket->writeDatagram(release, m_gateway, m_gatewayPort);
+        }
     }
+    m_upnp->cancel();
 
     m_retryTimer.stop();
     m_renewTimer.stop();
@@ -126,7 +168,26 @@ void PortMapper::beginProtocol(Protocol protocol)
     m_snapshot.protocol = protocolName();
     m_snapshot.message = QStringLiteral("Asking gateway %1 via %2").arg(m_gateway.toString(), protocolName());
     emit changed();
+    if (protocol == Protocol::Upnp) {
+        m_retryTimer.stop();
+        m_upnp->start(m_gateway, m_localAddress, m_snapshot.internalPort, m_snapshot.externalPort, RequestedLifetime);
+        return;
+    }
     sendRequest();
+}
+
+void PortMapper::fallBack(const QString &reason)
+{
+    m_reasons << reason;
+    if (m_protocol == Protocol::Pcp) {
+        beginProtocol(Protocol::NatPmp);
+        return;
+    }
+    if (m_protocol == Protocol::NatPmp) {
+        beginProtocol(Protocol::Upnp);
+        return;
+    }
+    fail(m_reasons.join(QLatin1Char(' ')));
 }
 
 void PortMapper::sendRequest()
@@ -150,9 +211,7 @@ void PortMapper::onRetryTimeout()
         beginProtocol(Protocol::NatPmp);
         return;
     }
-    fail(QStringLiteral("Gateway %1 did not answer PCP or NAT-PMP. It may only support UPnP, "
-                        "or have port mapping turned off.")
-             .arg(m_gateway.toString()));
+    fallBack(QStringLiteral("Gateway %1 did not answer PCP or NAT-PMP.").arg(m_gateway.toString()));
 }
 
 void PortMapper::onReadyRead()
@@ -185,7 +244,7 @@ void PortMapper::handlePcp(const QByteArray &data)
         return;
     }
     if (result != 0) {
-        fail(QStringLiteral("Gateway refused the PCP mapping: %1").arg(pcpResultName(result)));
+        fallBack(QStringLiteral("Gateway refused the PCP mapping: %1.").arg(pcpResultName(result)));
         return;
     }
     if (data.size() < 60 || data.mid(24, 12) != m_nonce)
@@ -206,7 +265,7 @@ void PortMapper::handleNatPmp(const QByteArray &data)
         beginProtocol(Protocol::NatPmp);
         return;
     }
-    if (data.size() < 4)
+    if (m_protocol != Protocol::NatPmp || data.size() < 4)
         return;
 
     const quint8 opcode = quint8(data[1]);
@@ -214,7 +273,7 @@ void PortMapper::handleNatPmp(const QByteArray &data)
 
     if (opcode == 129) { // UDP mapping response
         if (result != 0) {
-            fail(QStringLiteral("Gateway refused the NAT-PMP mapping: %1").arg(natPmpResultName(result)));
+            fallBack(QStringLiteral("Gateway refused the NAT-PMP mapping: %1.").arg(natPmpResultName(result)));
             return;
         }
         if (data.size() < 16)
@@ -243,7 +302,10 @@ void PortMapper::mapped(quint16 externalPort, quint32 lifetime, const QHostAddre
     if (!externalAddress.isNull() && externalAddress != QHostAddress(QHostAddress::AnyIPv4))
         m_snapshot.externalAddress = externalAddress;
     m_snapshot.message = QStringLiteral("External port %1 mapped via %2").arg(externalPort).arg(protocolName());
-    m_renewTimer.start(std::max<qint64>(30, lifetime / 2) * 1000);
+    // A permanent UPnP mapping (lifetime 0) is still refreshed now and then,
+    // in case the gateway restarts.
+    const qint64 renewSeconds = lifetime == 0 ? UpnpIgd::PermanentRefreshSeconds : std::max<quint32>(30, lifetime / 2);
+    m_renewTimer.start(int(renewSeconds * 1000));
     emit changed();
 }
 

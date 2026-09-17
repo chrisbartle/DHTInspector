@@ -2,6 +2,7 @@
 
 #include "dhtcore/Bep42.h"
 #include "dhtcore/Endpoint.h"
+#include "dhtcore/History.h"
 #include "dhtcore/NetworkStats.h"
 #include "dhtcore/NodeId.h"
 
@@ -151,6 +152,10 @@ struct CrawlSnapshot
     std::shared_ptr<const NetworkStatsSet> stats;
     SizeEstimate sizeV4;
     SizeEstimate sizeV6;
+    LookupPerformance lookupV4;
+    LookupPerformance lookupV6;
+    // The session so far, sampled while scanning; shared, not copied.
+    std::shared_ptr<const std::vector<HistorySample>> history;
 };
 
 // --- precise count (Census) -------------------------------------------------

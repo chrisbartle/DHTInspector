@@ -21,7 +21,7 @@ Lookup::Lookup(Kind kind, const NodeId &target, Family family, const NodeId &sel
 {
 }
 
-void Lookup::addCandidate(const NodeId &id, const Endpoint &endpoint)
+void Lookup::addCandidate(const NodeId &id, const Endpoint &endpoint, int hops)
 {
     if (m_finished || id == m_self)
         return;
@@ -31,7 +31,7 @@ void Lookup::addCandidate(const NodeId &id, const Endpoint &endpoint)
         return;
     m_seen.insert(endpoint);
 
-    Candidate candidate{id, endpoint, State::New, {}};
+    Candidate candidate{id, endpoint, State::New, {}, hops};
     const auto pos = std::lower_bound(m_candidates.begin(), m_candidates.end(), candidate,
                                       [this](const Candidate &a, const Candidate &b) {
                                           return NodeId::closer(m_target, a.id, b.id);
@@ -51,6 +51,7 @@ void Lookup::addCandidate(const NodeId &id, const Endpoint &endpoint)
 void Lookup::start()
 {
     m_started = true;
+    m_clock.start();
     step();
 }
 
@@ -143,9 +144,10 @@ void Lookup::onReply(const Endpoint &endpoint, const RpcReply &reply)
 
     // addCandidate() steps on its own once started; batch the inserts first.
     const bool wasStarted = m_started;
+    const int hops = it->hops + 1;  // `it` is invalidated by the inserts
     m_started = false;
     for (const krpc::CompactNode &node : found)
-        addCandidate(node.id, node.endpoint);
+        addCandidate(node.id, node.endpoint, hops);
     m_started = wasStarted;
 
     step();
@@ -203,6 +205,7 @@ void Lookup::finish()
     result.sightings = m_sightings;
     result.queried = m_queries;
     result.responded = m_responded;
+    result.durationMs = m_clock.isValid() ? m_clock.elapsed() : 0;
     result.itemFound = m_itemFound;
     result.itemIsMutable = m_itemIsMutable;
     result.itemValue = m_itemValue;
@@ -212,8 +215,11 @@ void Lookup::finish()
     for (const Candidate &c : m_candidates) {
         if (int(result.closest.size()) >= K)
             break;
-        if (c.state == State::Responded)
-            result.closest.push_back({c.id, c.endpoint, c.token});
+        if (c.state != State::Responded)
+            continue;
+        if (result.closest.empty())
+            result.hops = c.hops;
+        result.closest.push_back({c.id, c.endpoint, c.token});
     }
 
     m_done = true;

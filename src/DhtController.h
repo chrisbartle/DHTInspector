@@ -53,6 +53,8 @@ class DhtController : public QObject
     Q_PROPERTY(QVariantMap suspicious READ suspicious NOTIFY networkStatsChanged)
     Q_PROPERTY(QVariantMap inbound READ inbound NOTIFY networkStatsChanged)
     Q_PROPERTY(QVariantList sizeEstimates READ sizeEstimates NOTIFY snapshotChanged)
+    Q_PROPERTY(QVariantList lookupPerformance READ lookupPerformance NOTIFY snapshotChanged)
+    Q_PROPERTY(QVariantMap history READ history NOTIFY historyChanged)
     Q_PROPERTY(QVariantMap census READ census NOTIFY snapshotChanged)
     Q_PROPERTY(CatalogListModel *nodeList READ nodeList CONSTANT)
     Q_PROPERTY(QVariantMap nodeListInfo READ nodeListInfo NOTIFY nodeListChanged)
@@ -128,6 +130,8 @@ public:
     // Ready to display: see buildNetworkStats() for the shape.
     QVariantMap networkStats() const { return m_networkStats; }
     QVariantList sizeEstimates() const { return m_sizeEstimates; }
+    QVariantList lookupPerformance() const { return m_lookupPerformance; }
+    QVariantMap history() const { return m_history; }
     // The precise count: progress, per-slice results and totals.
     QVariantMap census() const { return m_census; }
     Q_INVOKABLE void startCensus();
@@ -240,6 +244,7 @@ signals:
     void portChanged();
     void ipv6EnabledChanged();
     void portForwardingChanged();
+    void historyChanged();
     void bep42EnabledChanged();
     void readOnlyModeChanged();
     void sendLimitChanged();
@@ -297,6 +302,9 @@ private:
     std::shared_ptr<const dht::NetworkStatsSet> m_statsSet;
     QVariantMap m_networkStats;
     QVariantList m_sizeEstimates;
+    QVariantList m_lookupPerformance;
+    QVariantMap m_history;
+    std::shared_ptr<const std::vector<dht::HistorySample>> m_historySource;
     QVariantMap m_census;
     void buildNetworkStats();
 

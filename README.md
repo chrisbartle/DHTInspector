@@ -16,11 +16,11 @@ Two jobs, one tool:
 | Area | State |
 |---|---|
 | DHT engine (`dhtcore`) | Working: BEP 5, BEP 32, BEP 42, BEP 43, BEP 44, BEP 51, peer storage |
-| Port forwarding | Working against test gateways: PCP with NAT-PMP fallback |
+| Port forwarding | Working against test gateways: PCP, then NAT-PMP, then UPnP IGD |
 | Setup tab | Working |
 | Search tab | Working: peer and item lookups, announce, BEP 44 publishing |
 | Data Store tab | Working: announced peers with addresses and expiry |
-| Global Health tab | In progress: network scan, address counts, quick and precise size, statistics, feature checks, queries to us, suspicious groups, filterable node list with export; charts over time to come |
+| Global Health tab | Working: network scan, address counts, quick and precise size, statistics, feature checks, queries to us, suspicious groups, churn, lookup performance, charts over time, filterable node list with export |
 | Probe Node tab | Working: one node, any query, replies decoded in full |
 
 ### What the engine does
@@ -110,6 +110,23 @@ Two jobs, one tool:
   the number of ranges, at four depths); and nodes whose listed neighbours
   are mostly in their own subnet. Addresses showing two or more signals are
   listed first. Every group has a link that filters the node list to it.
+- Churn, by address (up while any node there answers): addresses that
+  stopped answering, came back, or newly appeared in the last hour; the
+  share still answering after 1, 6 and 24 hours, shown once the scan has
+  run that long; and how long answering addresses have been up and how
+  long finished spells lasted. Departures are seen when a node is
+  rechecked, so they lag by up to ten minutes.
+- Lookup performance: time (median and 90th percentile), queries, hops to
+  the closest node, share of queries answered and share of lookups that
+  found all eight closest nodes, over the latest 400 random-target lookups
+  per family.
+- Over time: while monitoring, a sample every 30 seconds of address counts,
+  the quick estimate, client shares, feature shares, suspicious-group
+  counts, churn, query rates, round trip and lookup time, drawn as charts
+  with a hover readout and a table view. The newest 360 samples are kept as
+  taken and older ones are merged pairwise, so a long session stays within
+  720 samples. Pauses show as gaps. The history is included in the JSON
+  export and discarded when the engine stops.
 - Node list: every node found, one row per address and port, filtered by
   family, status, client, version, BEP 42, round trip, address or subnet,
   node ID prefix, port, nodes per address, feature check results and
@@ -118,11 +135,17 @@ Two jobs, one tool:
   address was not contacted. Each address opens the node on the Probe tab.
 - Export, only when asked: every node matching the filters as CSV (written
   on a background thread, with feature results and signals), or the
-  statistics, size estimates, precise count, queries to us and suspicious
-  groups as JSON. Nothing is saved otherwise.
+  statistics, size estimates, precise count, queries to us, suspicious
+  groups, lookup performance and the session history as JSON. Nothing is saved otherwise.
 - BEP 43 read-only mode, off by default and switchable while running: every
   query we send carries `ro`, and every query we receive is dropped without a
   reply, so the store gains nothing while it is on. Our own lookups still work.
+- Port forwarding (Setup tab, off by default): asks the IPv4 gateway to
+  forward the UDP port with PCP, then NAT-PMP, then UPnP IGD (SSDP search,
+  device description, `AddPortMapping` on the WAN connection service, with
+  a new port on a conflict and a permanent mapping where leases are not
+  supported). Mappings are renewed while the engine runs and removed when it
+  stops. When every method fails, the Setup tab shows why for each.
 - Node IDs can be given explicitly; otherwise each node picks a random one.
 - Stopping the engine destroys it: routing tables, stored peers and tokens are
   all discarded. The Setup tab keeps the node IDs that were in use, so a
@@ -132,7 +155,7 @@ Two jobs, one tool:
 - BEP 44: stores immutable and mutable items, with Ed25519 signature checks,
   sequence numbers and compare-and-swap. Items expire after two hours.
 
-Not yet implemented: BEP 33 (scrape), UPnP port mapping.
+Not yet implemented: BEP 33 (scrape).
 
 ## Layout
 
@@ -147,7 +170,8 @@ dhtcore/             protocol engine, static library, Qt Core + Network only
   Lookup             iterative find_node / get_peers
   DhtNode            one node on one address family
   DhtEngine          nodes + storage + port mapping; the public entry point
-  PortMapper         PCP (RFC 6887) with NAT-PMP (RFC 6886) fallback
+  PortMapper         PCP (RFC 6887), then NAT-PMP (RFC 6886), then UPnP IGD
+  Upnp               SSDP search, device description, SOAP port mapping
   Gateway            default gateway discovery (Windows, Linux)
 src/                 application: QML-facing controller and node list model
 qml/                 QML module "DHTInspector"

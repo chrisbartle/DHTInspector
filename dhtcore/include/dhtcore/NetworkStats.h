@@ -11,6 +11,7 @@
 
 #include <array>
 #include <deque>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -25,6 +26,30 @@ struct FeatureTally
 {
     double tested = 0;
     double yes = 0;
+};
+
+// How addresses come and go, from the scan's timestamps. An address is up
+// while any node there answers. Departures are seen only when a node is
+// rechecked, so they lag by up to the recheck interval.
+struct ChurnStats
+{
+    static constexpr qint64 WindowMs = 60 * 60 * 1000;
+    static constexpr std::array<qint64, 3> SurvivalMs{60 * 60 * 1000, 6 * 60 * 60 * 1000, 24 * 60 * 60 * 1000};
+    // Upper bounds of the time bins, the last one open-ended.
+    static constexpr std::array<qint64, 8> BinEndsMs{10 * 60 * 1000,      30 * 60 * 1000,       60 * 60 * 1000,
+                                                    3 * 60 * 60 * 1000,  6 * 60 * 60 * 1000,   12 * 60 * 60 * 1000,
+                                                    24 * 60 * 60 * 1000, std::numeric_limits<qint64>::max()};
+
+    int departedLastHour = 0;  // stopped answering within the window
+    int returnedLastHour = 0;  // answering again, after having stopped, since within the window
+    int arrivedLastHour = 0;   // answering, first heard of within the window
+    // Of the addresses up at the start of each window, how many still are.
+    std::array<int, 3> survivalBase{};
+    std::array<int, 3> survivalKept{};
+    std::array<int, 8> uptimeBins{};   // answering addresses, by how long they have been up
+    std::array<int, 8> sessionBins{};  // addresses gone, by how long their last spell lasted
+    qint64 medianUptimeMs = -1;
+    qint64 medianSessionMs = -1;
 };
 
 struct NetworkStats
@@ -69,6 +94,8 @@ struct NetworkStats
     // Listed addresses that cannot be contacted, by reason. Port 0 counts
     // addresses listed with that port, even if listed with others too.
     std::array<int, AddressProblemCount> unroutableByProblem{};
+
+    ChurnStats churn;
 
     // Nodes per answering address, to turn node counts into address counts.
     double nodesPerIp() const { return answeringIps > 0 ? double(answeringNodes) / answeringIps : 1.0; }

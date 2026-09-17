@@ -38,6 +38,7 @@ public:
     void clear();
     InboundSummary summary() const;
     int trackedAddresses() const { return int(m_queriers.size()); }
+    qint64 queries() const { return m_queries; }
 
 private:
     using AddressKey = std::array<quint8, 16>;

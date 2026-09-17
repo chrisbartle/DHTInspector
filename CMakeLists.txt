@@ -66,6 +66,7 @@ qt_add_qml_module(DHTInspector
         qml/ThemedComboBox.qml
         qml/NodeListPanel.qml
         qml/EmptyState.qml
+        qml/LineChart.qml
         qml/SearchPage.qml
         qml/SetupPage.qml
         qml/DataStorePage.qml

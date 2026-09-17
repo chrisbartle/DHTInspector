@@ -738,6 +738,132 @@ ScrollView {
             }
         }
 
+        // --- over time -----------------------------------------------------------
+        Panel {
+            id: historyPanel
+
+            readonly property var h: DhtController.history
+            readonly property var s: h.series || ({})
+            property string view: "addresses"
+            property bool table: false
+
+            function column(key) {
+                return s[key] || []
+            }
+            function formatCount(v) {
+                return page.big(v)
+            }
+            function formatShare(v) {
+                return (100 * v).toFixed(v > 0 && v < 0.1 ? 1 : 0) + "%"
+            }
+            function formatRate(v) {
+                if (v === 0)
+                    return "0"
+                return v >= 100 ? page.count(Math.round(v)) : Number(v).toFixed(v < 10 ? 1 : 0)
+            }
+            function formatMs(v) {
+                if (v === 0)
+                    return "0"
+                if (v < 1000)
+                    return page.count(Math.round(v)) + " ms"
+                const seconds = v / 1000
+                return qsTr("%1 s").arg(Number(seconds).toLocaleString(Qt.locale(), "f", Number.isInteger(seconds) ? 0 : 1))
+            }
+
+            // What each view plots; one unit per chart.
+            readonly property var views: [
+                { key: "addresses", label: qsTr("Addresses"), format: historyPanel.formatCount, max: 0,
+                  series: [{ name: qsTr("Heard of"), key: "heardIps" }, { name: qsTr("Connected"), key: "connectedIps" },
+                           { name: qsTr("Answering"), key: "answeringIps" }] },
+                { key: "size", label: qsTr("Network size"), format: historyPanel.formatCount, max: 0,
+                  series: [{ name: qsTr("Quick estimate"), key: "sizeEstimate" }, { name: qsTr("Answering"), key: "answeringIps" }] },
+                { key: "clients", label: qsTr("Clients"), format: historyPanel.formatShare, max: 0, series: [] },
+                { key: "features", label: qsTr("Features"), format: historyPanel.formatShare, max: 1,
+                  series: [{ name: qsTr("BEP 42 compliant"), key: "bep42Share" }, { name: qsTr("BEP 51"), key: "bep51Share" },
+                           { name: qsTr("BEP 44"), key: "bep44Share" }, { name: qsTr("Sends ip"), key: "sendsIpShare" }] },
+                { key: "suspicious", label: qsTr("Suspicious"), format: historyPanel.formatCount, max: 0,
+                  series: [{ name: qsTr("Two or more signals"), key: "flagged" }, { name: qsTr("Many nodes"), key: "manyNodes" },
+                           { name: qsTr("Dense subnets"), key: "denseSubnets" }, { name: qsTr("Shared IDs"), key: "sharedIds" }] },
+                { key: "churn", label: qsTr("Churn"), format: historyPanel.formatCount, max: 0,
+                  series: [{ name: qsTr("Stopped answering, last hour"), key: "departedPerHour" },
+                           { name: qsTr("Came back, last hour"), key: "returnedPerHour" }] },
+                { key: "traffic", label: qsTr("Query rates"), format: historyPanel.formatRate, max: 0,
+                  series: [{ name: qsTr("Scan queries/s"), key: "queriesPerSecond" }, { name: qsTr("Answers/s"), key: "answersPerSecond" },
+                           { name: qsTr("Feature checks/s"), key: "featureChecksPerSecond" },
+                           { name: qsTr("Queries to us/s"), key: "inboundPerSecond" }] },
+                { key: "rtt", label: qsTr("Round trip"), format: historyPanel.formatMs, max: 0,
+                  series: [{ name: qsTr("Median round trip"), key: "rttMedianMs" }] },
+                { key: "lookups", label: qsTr("Lookup time"), format: historyPanel.formatMs, max: 0,
+                  series: [{ name: qsTr("Median lookup time"), key: "lookupMedianMs" }] }
+            ]
+            readonly property var current: {
+                for (const v of views)
+                    if (v.key === view)
+                        return v
+                return views[0]
+            }
+            readonly property var chartSeries: {
+                if (current.key === "clients") {
+                    const out = []
+                    const names = h.clientNames || []
+                    for (const n of names)
+                        out.push({ name: n, values: (h.clients || {})[n] || [] })
+                    if (names.length > 0)
+                        out.push({ name: qsTr("All others"), values: h.otherClients || [] })
+                    return out
+                }
+                return current.series.map(x => ({ name: x.name, values: column(x.key) }))
+            }
+
+            Layout.fillWidth: true
+            title: qsTr("Over Time")
+            subtitle: qsTr("The session so far, sampled every 30 seconds while monitoring is on; older samples are merged as the session grows. Gaps are pauses. Nothing is kept once the engine stops.")
+
+            Flow {
+                Layout.fillWidth: true
+                spacing: Theme.spacingSmall
+
+                Repeater {
+                    model: historyPanel.views
+                    delegate: ThemedButton {
+                        required property var modelData
+                        text: modelData.label
+                        primary: historyPanel.view === modelData.key
+                        Accessible.name: qsTr("Chart %1").arg(modelData.label)
+                        onClicked: historyPanel.view = modelData.key
+                    }
+                }
+                ThemedButton {
+                    text: historyPanel.table ? qsTr("Hide table") : qsTr("Show as table")
+                    onClicked: historyPanel.table = !historyPanel.table
+                }
+            }
+
+            LineChart {
+                Layout.fillWidth: true
+                title: historyPanel.current.label
+                times: historyPanel.h.times || []
+                gaps: historyPanel.h.gaps || []
+                series: historyPanel.chartSeries
+                format: historyPanel.current.format
+                fixedMax: historyPanel.current.max
+                showTable: historyPanel.table
+            }
+
+            Hint {
+                visible: historyPanel.view === "clients"
+                text: qsTr("Shares of answering addresses for the five clients most common now; everything else is under All others.")
+            }
+            Hint {
+                visible: historyPanel.view === "size"
+                text: qsTr("The quick estimate is rough; the precise count above is the one to trust.")
+            }
+            Hint {
+                visible: historyPanel.view === "churn"
+                text: qsTr("Rolling counts over the hour before each sample. A node is only seen to stop when it is rechecked, up to ten minutes later.")
+            }
+        }
+
         // --- statistics ----------------------------------------------------------
         RowLayout {
             Layout.fillWidth: true
@@ -866,6 +992,195 @@ ScrollView {
                 EmptyState {
                     visible: page.rtt.samples === 0
                     message: qsTr("No round trips measured yet")
+                }
+            }
+
+            // Churn -------------------------------------------------------------
+            Panel {
+                id: churnPanel
+
+                readonly property var c: page.stats.churn || null
+                readonly property real monitoredHours: page.crawl.monitoredSeconds / 3600
+
+                function minutes(m) {
+                    if (m < 0)
+                        return "—"
+                    if (m < 90)
+                        return qsTr("%1 min").arg(Math.round(m))
+                    return qsTr("%1 h").arg((m / 60).toFixed(m < 600 ? 1 : 0))
+                }
+
+                Layout.fillWidth: true
+                Layout.columnSpan: parent.columns
+                title: qsTr("Churn")
+                subtitle: qsTr("How addresses come and go. An address is up while any node there answers. Nodes are rechecked every ten minutes, so changes show up that much later, and nothing can be said about spans longer than the scan has been running.")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    visible: churnPanel.c !== null
+                    columns: page.availableWidth > 1100 ? 5 : page.availableWidth > 700 ? 3 : 2
+                    columnSpacing: Theme.spacingLarge
+
+                    StatTile {
+                        label: qsTr("Stopped answering, last hour")
+                        value: churnPanel.c ? page.count(churnPanel.c.departedLastHour) : "—"
+                        detail: churnPanel.c ? qsTr("%1 of those up").arg(page.percent(churnPanel.c.departedShare)) : ""
+                    }
+                    StatTile {
+                        label: qsTr("Came back, last hour")
+                        value: churnPanel.c ? page.count(churnPanel.c.returnedLastHour) : "—"
+                    }
+                    StatTile {
+                        label: qsTr("New and answering, last hour")
+                        value: churnPanel.c ? page.count(churnPanel.c.arrivedLastHour) : "—"
+                        detail: churnPanel.monitoredHours < 2 ? qsTr("mostly the scan still finding them") : ""
+                    }
+                    StatTile {
+                        label: qsTr("Median time up so far")
+                        value: churnPanel.c ? churnPanel.minutes(churnPanel.c.medianUptimeMinutes) : "—"
+                        detail: qsTr("answering addresses")
+                    }
+                    StatTile {
+                        label: qsTr("Median finished spell")
+                        value: churnPanel.c ? churnPanel.minutes(churnPanel.c.medianSessionMinutes) : "—"
+                        detail: qsTr("addresses that stopped")
+                    }
+                }
+
+                FieldLabel {
+                    Layout.preferredWidth: -1
+                    visible: churnPanel.c !== null
+                    text: qsTr("Still answering after")
+                }
+                Repeater {
+                    model: churnPanel.c ? churnPanel.c.survival : []
+                    delegate: RowLayout {
+                        id: survivalRow
+                        required property var modelData
+                        readonly property bool enough: churnPanel.monitoredHours >= modelData.hours && modelData.base > 0
+                        Layout.fillWidth: true
+                        ShareRow {
+                            visible: survivalRow.enough
+                            label: qsTr("%n hour(s), of %1 up at the start", "", survivalRow.modelData.hours)
+                                   .arg(page.count(survivalRow.modelData.base))
+                            count: survivalRow.modelData.kept
+                            share: Math.max(0, survivalRow.modelData.share)
+                            tone: Theme.series[2]
+                        }
+                        Hint {
+                            visible: !survivalRow.enough
+                            text: qsTr("%n hour(s): needs at least that long of monitoring", "", survivalRow.modelData.hours)
+                        }
+                    }
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    visible: churnPanel.c !== null
+                    columns: page.availableWidth > 1000 ? 2 : 1
+                    columnSpacing: Theme.spacingLarge
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignTop
+                        FieldLabel {
+                            Layout.preferredWidth: -1
+                            text: qsTr("Answering addresses, by time up so far")
+                        }
+                        Repeater {
+                            model: churnPanel.c ? churnPanel.c.uptime : []
+                            delegate: ShareRow {
+                                required property var modelData
+                                label: modelData.label
+                                count: modelData.count
+                                share: modelData.share
+                                tone: Theme.series[0]
+                            }
+                        }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignTop
+                        FieldLabel {
+                            Layout.preferredWidth: -1
+                            text: qsTr("Addresses that stopped, by how long they had been up")
+                        }
+                        Repeater {
+                            model: churnPanel.c ? churnPanel.c.sessions : []
+                            delegate: ShareRow {
+                                required property var modelData
+                                label: modelData.label
+                                count: modelData.count
+                                share: modelData.share
+                                tone: Theme.series[1]
+                            }
+                        }
+                    }
+                }
+
+                EmptyState {
+                    visible: churnPanel.c === null
+                    message: qsTr("Appears once the scan has run")
+                }
+            }
+
+            // Lookup performance -------------------------------------------------
+            Panel {
+                id: lookupPanel
+
+                Layout.fillWidth: true
+                Layout.columnSpan: parent.columns
+                title: qsTr("Lookup Performance")
+                subtitle: qsTr("How the random-target lookups behind the quick size estimate go: iterative find_node searches for the eight closest nodes, three queries at a time. Over the latest 400 per family.")
+
+                Repeater {
+                    model: DhtController.lookupPerformance
+
+                    delegate: ColumnLayout {
+                        id: lookupFamily
+                        required property var modelData
+                        readonly property var p: modelData
+                        Layout.fillWidth: true
+                        spacing: Theme.spacingSmall
+
+                        FieldLabel {
+                            Layout.preferredWidth: -1
+                            visible: DhtController.lookupPerformance.length > 1
+                            text: lookupFamily.p.family
+                        }
+                        GridLayout {
+                            Layout.fillWidth: true
+                            visible: lookupFamily.p.samples > 0
+                            columns: page.availableWidth > 1100 ? 7 : page.availableWidth > 700 ? 4 : 2
+                            columnSpacing: Theme.spacingLarge
+
+                            StatTile { label: qsTr("Lookups"); value: page.count(lookupFamily.p.samples) }
+                            StatTile { label: qsTr("Median time"); value: page.ms(Math.round(lookupFamily.p.medianMs)) }
+                            StatTile { label: qsTr("90th percentile"); value: page.ms(Math.round(lookupFamily.p.p90Ms)) }
+                            StatTile {
+                                label: qsTr("Median queries")
+                                value: lookupFamily.p.medianQueries < 0 ? "—" : page.count(lookupFamily.p.medianQueries)
+                            }
+                            StatTile {
+                                label: qsTr("Median hops")
+                                value: lookupFamily.p.medianHops < 0 ? "—" : page.count(lookupFamily.p.medianHops)
+                                detail: qsTr("referrals to the closest node")
+                            }
+                            StatTile {
+                                label: qsTr("Queries answered")
+                                value: lookupFamily.p.responseRate < 0 ? "—" : page.percent(lookupFamily.p.responseRate)
+                            }
+                            StatTile {
+                                label: qsTr("Found all eight")
+                                value: lookupFamily.p.fullShare < 0 ? "—" : page.percent(lookupFamily.p.fullShare)
+                                tone: lookupFamily.p.fullShare >= 0 && lookupFamily.p.fullShare < 0.9 ? Theme.warn : Theme.text
+                            }
+                        }
+                        Hint {
+                            visible: lookupFamily.p.samples === 0
+                            text: qsTr("No lookups yet. They run while monitoring is on.")
+                        }
+                    }
                 }
             }
 

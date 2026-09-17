@@ -38,6 +38,9 @@ struct Accumulator
     double unknownOtherError = 0;
     std::vector<std::pair<quint32, double>> samples;  // BEP 51 "num", weighted
     std::array<int, AddressProblemCount> problems{};
+    ChurnStats churn;
+    std::vector<qint64> uptimes;   // ms, answering addresses
+    std::vector<qint64> sessions;  // ms, gone addresses
 
     void add(const Accumulator &o)
     {
@@ -67,6 +70,19 @@ struct Accumulator
         samples.insert(samples.end(), o.samples.begin(), o.samples.end());
         for (size_t i = 0; i < problems.size(); ++i)
             problems[i] += o.problems[i];
+        churn.departedLastHour += o.churn.departedLastHour;
+        churn.returnedLastHour += o.churn.returnedLastHour;
+        churn.arrivedLastHour += o.churn.arrivedLastHour;
+        for (size_t i = 0; i < churn.survivalBase.size(); ++i) {
+            churn.survivalBase[i] += o.churn.survivalBase[i];
+            churn.survivalKept[i] += o.churn.survivalKept[i];
+        }
+        for (size_t i = 0; i < churn.uptimeBins.size(); ++i) {
+            churn.uptimeBins[i] += o.churn.uptimeBins[i];
+            churn.sessionBins[i] += o.churn.sessionBins[i];
+        }
+        uptimes.insert(uptimes.end(), o.uptimes.begin(), o.uptimes.end());
+        sessions.insert(sessions.end(), o.sessions.begin(), o.sessions.end());
     }
 };
 
@@ -101,6 +117,16 @@ NetworkStats summarise(const Accumulator &a, const QHash<quint64, ClientInfo> &d
     s.unknownOther = a.unknownOther;
     s.unknownOtherError = a.unknownOtherError;
     s.unroutableByProblem = a.problems;
+    s.churn = a.churn;
+    const auto median = [](std::vector<qint64> v) -> qint64 {
+        if (v.empty())
+            return -1;
+        const auto mid = v.begin() + qsizetype(v.size() - 1) / 2;
+        std::nth_element(v.begin(), mid, v.end());
+        return *mid;
+    };
+    s.churn.medianUptimeMs = median(a.uptimes);
+    s.churn.medianSessionMs = median(a.sessions);
     if (!a.samples.empty()) {
         std::vector<std::pair<quint32, double>> sorted = a.samples;
         std::sort(sorted.begin(), sorted.end());
@@ -238,13 +264,73 @@ NetworkStatsSet computeNetworkStats(const NodeCatalog &catalog, qint64 nowMs, in
         ++a.heardIps;
         bool connected = false;
         int answering = 0;
+        // For churn: when the address came up, when it was first heard of,
+        // whether this spell is a return, and the last spell of a gone one.
+        quint32 upSince = 0;
+        quint32 firstSeen = 0;
+        bool rejoined = false;
+        bool anyGone = false;
+        quint32 lastAnswered = 0;
+        quint32 lastSpellStart = 0;
         for (size_t i = begin; i < end; ++i) {
             const CatalogEntry &e = catalog.at(entries[i].second);
             connected = connected || e.lastAnswered > 0;
-            answering += e.state == CatalogEntry::State::Responsive ? 1 : 0;
+            if (e.firstSeen && (!firstSeen || e.firstSeen < firstSeen))
+                firstSeen = e.firstSeen;
+            if (e.state == CatalogEntry::State::Responsive) {
+                ++answering;
+                if (e.answeringSince && (!upSince || e.answeringSince < upSince)) {
+                    upSince = e.answeringSince;
+                    rejoined = e.has(CatalogEntry::Rejoined);
+                }
+            } else if (e.state == CatalogEntry::State::Gone) {
+                anyGone = true;
+                if (e.lastAnswered > lastAnswered) {
+                    lastAnswered = e.lastAnswered;
+                    lastSpellStart = e.answeringSince;
+                }
+            }
         }
         if (connected)
             ++a.connectedIps;
+
+        const auto binOf = [](qint64 ms) {
+            size_t bin = 0;
+            while (bin + 1 < ChurnStats::BinEndsMs.size() && ms >= ChurnStats::BinEndsMs[bin])
+                ++bin;
+            return bin;
+        };
+        ChurnStats &churn = a.churn;
+        if (answering > 0 && upSince) {
+            const qint64 up = catalog.ageMs(upSince, nowMs);
+            ++churn.uptimeBins[binOf(up)];
+            a.uptimes.push_back(up);
+            if (up <= ChurnStats::WindowMs) {
+                if (rejoined)
+                    ++churn.returnedLastHour;
+                else if (firstSeen && catalog.ageMs(firstSeen, nowMs) <= ChurnStats::WindowMs)
+                    ++churn.arrivedLastHour;
+            }
+            for (size_t w = 0; w < ChurnStats::SurvivalMs.size(); ++w) {
+                if (up >= ChurnStats::SurvivalMs[w]) {
+                    ++churn.survivalBase[w];
+                    ++churn.survivalKept[w];
+                }
+            }
+        } else if (answering == 0 && anyGone && lastAnswered && lastSpellStart) {
+            const qint64 since = catalog.ageMs(lastAnswered, nowMs);
+            const qint64 session = std::max<qint64>(0, catalog.ageMs(lastSpellStart, nowMs) - since);
+            ++churn.sessionBins[binOf(session)];
+            a.sessions.push_back(session);
+            if (since <= ChurnStats::WindowMs)
+                ++churn.departedLastHour;
+            // Up at the window's start, gone since.
+            const qint64 started = catalog.ageMs(lastSpellStart, nowMs);
+            for (size_t w = 0; w < ChurnStats::SurvivalMs.size(); ++w) {
+                if (started >= ChurnStats::SurvivalMs[w] && since < ChurnStats::SurvivalMs[w])
+                    ++churn.survivalBase[w];
+            }
+        }
         if (answering > 0) {
             ++a.answeringIps;
             a.answeringNodes += answering;

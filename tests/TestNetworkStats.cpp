@@ -88,6 +88,7 @@ private slots:
     void countsAddressesNotNodes();
     void talliesFeaturesPerAddress();
     void classifiesUnreachableAddresses();
+    void measuresChurn();
 };
 
 void TestNetworkStats::countsOnlyResponsiveNodesPerFamily()
@@ -449,6 +450,83 @@ void TestNetworkStats::classifiesUnreachableAddresses()
     QCOMPARE(count(set.ipv6, AddressProblem::Reserved), 1);
     QCOMPARE(count(set.all, AddressProblem::Reserved), 2);
     QCOMPARE(count(set.all, AddressProblem::None), 0);
+}
+
+// Churn from the catalogue's timestamps, by address.
+void TestNetworkStats::measuresChurn()
+{
+    constexpr qint64 Minute = 60 * 1000;
+    constexpr qint64 Hour = 60 * Minute;
+    NodeCatalog catalog(100);
+    // Stamps count from the catalogue's creation, so "now" is well after it.
+    const qint64 now = nowMs() + 30 * Hour;
+    const auto at = [&](qint64 ago) { return catalog.stamp(now - ago); };
+    const auto add = [&](const char *address, quint16 port, State state) -> CatalogEntry & {
+        const auto slot = catalog.upsert(Endpoint(QHostAddress(QString::fromLatin1(address)), port), 0);
+        catalog.setState(slot, state);
+        CatalogEntry &e = catalog.at(slot);
+        e.firstSeen = at(29 * Hour);
+        return e;
+    };
+    using F = CatalogEntry;
+
+    // Up for 7 hours.
+    CatalogEntry &a = add("203.0.113.1", 6881, State::Responsive);
+    a.answeringSince = at(7 * Hour);
+    a.lastAnswered = at(Minute);
+    // Up for 20 minutes, back after being away.
+    CatalogEntry &b = add("203.0.113.2", 6881, State::Responsive);
+    b.answeringSince = at(20 * Minute);
+    b.lastAnswered = at(Minute);
+    b.set(F::Rejoined);
+    // Up for 5 minutes, first heard of 30 minutes ago: an arrival.
+    CatalogEntry &c = add("203.0.113.3", 6881, State::Responsive);
+    c.answeringSince = at(5 * Minute);
+    c.lastAnswered = at(Minute);
+    c.firstSeen = at(30 * Minute);
+    // Two nodes on one address: up since the earlier of them (2 hours).
+    CatalogEntry &d1 = add("203.0.113.4", 6881, State::Responsive);
+    d1.answeringSince = at(2 * Hour);
+    d1.lastAnswered = at(Minute);
+    CatalogEntry &d2 = add("203.0.113.4", 6882, State::Responsive);
+    d2.answeringSince = at(10 * Minute);
+    d2.lastAnswered = at(Minute);
+    // Gone 30 minutes ago after 2 hours up: up an hour ago, not since.
+    CatalogEntry &e = add("203.0.113.5", 6881, State::Gone);
+    e.answeringSince = at(2 * Hour + 30 * Minute);
+    e.lastAnswered = at(30 * Minute);
+    // Gone 3 hours ago after 4 hours up: up 6 hours ago, not 1 hour ago.
+    CatalogEntry &f = add("203.0.113.6", 6881, State::Gone);
+    f.answeringSince = at(7 * Hour);
+    f.lastAnswered = at(3 * Hour);
+    // Gone, but another node on the address still answers: the address is up.
+    CatalogEntry &g1 = add("203.0.113.7", 6881, State::Gone);
+    g1.answeringSince = at(3 * Hour);
+    g1.lastAnswered = at(10 * Minute);
+    CatalogEntry &g2 = add("203.0.113.7", 6882, State::Responsive);
+    g2.answeringSince = at(50 * Minute);
+    g2.lastAnswered = at(Minute);
+    // Never answered: no part in churn.
+    add("203.0.113.8", 6881, State::Silent);
+
+    const ChurnStats ch = computeNetworkStats(catalog, now).ipv4.churn;
+    QCOMPARE(ch.departedLastHour, 1);   // .5
+    QCOMPARE(ch.returnedLastHour, 1);   // .2
+    QCOMPARE(ch.arrivedLastHour, 1);    // .3
+    // Up an hour ago: .1, .4 still up; .5 gone since. (.7 came up 50 minutes ago.)
+    QCOMPARE(ch.survivalBase[0], 3);
+    QCOMPARE(ch.survivalKept[0], 2);
+    // Up six hours ago: .1 still up; .6 gone since.
+    QCOMPARE(ch.survivalBase[1], 2);
+    QCOMPARE(ch.survivalKept[1], 1);
+    QCOMPARE(ch.survivalBase[2], 0);
+    // Up time: 5 min (.3), 20 min (.2), 50 min (.7), 2 h (.4), 7 h (.1).
+    QCOMPARE(ch.uptimeBins, (std::array<int, 8>{1, 1, 1, 1, 0, 1, 0, 0}));
+    // Stamps are in 100 ms ticks.
+    QVERIFY(std::abs(ch.medianUptimeMs - 50 * Minute) <= 100);
+    // Finished spells: 2 h (.5) and 4 h (.6).
+    QCOMPARE(ch.sessionBins, (std::array<int, 8>{0, 0, 0, 1, 1, 0, 0, 0}));
+    QVERIFY(std::abs(ch.medianSessionMs - 2 * Hour) <= 200);
 }
 
 int runTestNetworkStats(int argc, char **argv)

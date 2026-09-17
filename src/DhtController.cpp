@@ -3,6 +3,7 @@
 #include "dhtcore/Bep44.h"
 #include "dhtcore/ClientVersion.h"
 #include "dhtcore/DhtEngine.h"
+#include "dhtcore/Support.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
@@ -17,6 +18,7 @@
 // #include <QSettings>
 #include <QThread>
 
+#include <cmath>
 #include <limits>
 
 namespace {
@@ -360,6 +362,7 @@ namespace {
 constexpr int ShownClients = 12;
 constexpr int ShownVersions = 15;
 constexpr int ShownPorts = 10;
+constexpr int ShownHistoryClients = 5;
 
 double shareOf(double part, double whole)
 {
@@ -541,7 +544,123 @@ QVariantMap statsMap(const dht::NetworkStats &s, int shownClients, int shownVers
         {QStringLiteral("unclassified"), s.unroutableByProblem[0]},
         {QStringLiteral("byProblem"), problems},
     });
+
+    // Churn. Times in minutes; shares -1 while there is nothing to go on.
+    const dht::ChurnStats &c = s.churn;
+    QVariantList survival;
+    for (size_t i = 0; i < c.survivalBase.size(); ++i) {
+        survival.append(QVariantMap{
+            {QStringLiteral("hours"), double(dht::ChurnStats::SurvivalMs[i]) / 3600000.0},
+            {QStringLiteral("base"), c.survivalBase[i]},
+            {QStringLiteral("kept"), c.survivalKept[i]},
+            {QStringLiteral("share"), c.survivalBase[i] > 0 ? double(c.survivalKept[i]) / c.survivalBase[i] : -1.0},
+        });
+    }
+    static const QStringList binLabels = {
+        DhtController::tr("under 10 min"), DhtController::tr("10–30 min"), DhtController::tr("30–60 min"),
+        DhtController::tr("1–3 h"),        DhtController::tr("3–6 h"),     DhtController::tr("6–12 h"),
+        DhtController::tr("12–24 h"),      DhtController::tr("over 24 h")};
+    const auto timeBins = [](const std::array<int, 8> &counts) {
+        int total = 0;
+        for (int n : counts)
+            total += n;
+        QVariantList out;
+        for (size_t i = 0; i < counts.size(); ++i) {
+            out.append(QVariantMap{
+                {QStringLiteral("label"), binLabels.value(int(i))},
+                {QStringLiteral("count"), counts[i]},
+                {QStringLiteral("share"), shareOf(counts[i], total)},
+            });
+        }
+        return out;
+    };
+    const auto minutes = [](qint64 ms) { return ms < 0 ? -1.0 : double(ms) / 60000.0; };
+    out.insert(QStringLiteral("churn"), QVariantMap{
+        {QStringLiteral("departedLastHour"), c.departedLastHour},
+        {QStringLiteral("returnedLastHour"), c.returnedLastHour},
+        {QStringLiteral("arrivedLastHour"), c.arrivedLastHour},
+        {QStringLiteral("departedShare"), shareOf(c.departedLastHour, s.answeringIps + c.departedLastHour)},
+        {QStringLiteral("survival"), survival},
+        {QStringLiteral("uptime"), timeBins(c.uptimeBins)},
+        {QStringLiteral("sessions"), timeBins(c.sessionBins)},
+        {QStringLiteral("medianUptimeMinutes"), minutes(c.medianUptimeMs)},
+        {QStringLiteral("medianSessionMinutes"), minutes(c.medianSessionMs)},
+    });
     return out;
+}
+
+QVariantMap lookupMap(const QString &family, const dht::LookupPerformance &p)
+{
+    return QVariantMap{
+        {QStringLiteral("family"), family},
+        {QStringLiteral("samples"), p.samples},
+        {QStringLiteral("medianMs"), p.medianMs},
+        {QStringLiteral("p90Ms"), p.p90Ms},
+        {QStringLiteral("medianQueries"), p.medianQueries},
+        {QStringLiteral("medianHops"), p.medianHops},
+        {QStringLiteral("responseRate"), p.responseRate},
+        {QStringLiteral("fullShare"), p.fullShare},
+    };
+}
+
+// The session history as columns for the charts: wall-clock times, and one
+// list per metric with null where a value was not known. Client shares
+// follow the clients most common now, the rest folded into "other".
+QVariantMap historyMap(const std::vector<dht::HistorySample> &samples, int shownClients)
+{
+    const qint64 wallOffset = QDateTime::currentMSecsSinceEpoch() - dht::nowMs();
+    QVariantList times, spans, gaps;
+    std::array<QVariantList, dht::MetricCount> series;
+    for (const dht::HistorySample &s : samples) {
+        times.append(double(s.atMs + wallOffset));
+        spans.append(double(s.spanMs));
+        gaps.append(s.gapBefore);
+        for (int m = 0; m < dht::MetricCount; ++m) {
+            const double v = s.values[size_t(m)];
+            series[size_t(m)].append(std::isnan(v) ? QVariant() : QVariant(v));
+        }
+    }
+    QVariantMap bySeries;
+    for (int m = 0; m < dht::MetricCount; ++m)
+        bySeries.insert(QString::fromLatin1(dht::metricKey(dht::Metric(m))), series[size_t(m)]);
+
+    QStringList names;
+    if (!samples.empty()) {
+        for (const auto &[name, share] : samples.back().clientShares) {
+            if (names.size() < shownClients)
+                names << name;
+        }
+    }
+    QVariantMap clientSeries;
+    QVariantList other;
+    for (const QString &name : std::as_const(names))
+        clientSeries.insert(name, QVariantList());
+    for (const dht::HistorySample &s : samples) {
+        double listed = 0;
+        QHash<QString, double> shares;
+        for (const auto &[name, share] : s.clientShares) {
+            shares.insert(name, share);
+            if (names.contains(name))
+                listed += share;
+        }
+        for (const QString &name : std::as_const(names)) {
+            QVariantList list = clientSeries.value(name).toList();
+            list.append(shares.contains(name) ? QVariant(shares.value(name)) : QVariant());
+            clientSeries.insert(name, list);
+        }
+        other.append(s.clientShares.empty() ? QVariant() : QVariant(std::max(0.0, 1.0 - listed)));
+    }
+
+    return QVariantMap{
+        {QStringLiteral("count"), int(samples.size())},
+        {QStringLiteral("times"), times},
+        {QStringLiteral("spans"), spans},
+        {QStringLiteral("gaps"), gaps},
+        {QStringLiteral("series"), bySeries},
+        {QStringLiteral("clientNames"), names},
+        {QStringLiteral("clients"), clientSeries},
+        {QStringLiteral("otherClients"), other},
+    };
 }
 
 QString idPrefixText(const dht::NodeId &id, int bits)
@@ -965,6 +1084,8 @@ void DhtController::exportSummary(const QUrl &file)
         {QStringLiteral("application"), QStringLiteral("DHT Inspector %1").arg(QCoreApplication::applicationVersion())},
         {QStringLiteral("countedBy"), QStringLiteral("IP address")},
         {QStringLiteral("sizeEstimates"), m_sizeEstimates},
+        {QStringLiteral("lookupPerformance"), m_lookupPerformance},
+        {QStringLiteral("history"), m_historySource ? historyMap(*m_historySource, 10) : QVariantMap{}},
         {QStringLiteral("census"), m_census},
     };
     if (m_statsSet) {
@@ -1214,6 +1335,10 @@ void DhtController::resetStatus()
     m_stats = EngineStatistics{};
     m_crawl = CrawlStatus{};
     m_sizeEstimates.clear();
+    m_lookupPerformance.clear();
+    m_historySource.reset();
+    m_history = historyMap({}, ShownHistoryClients);
+    emit historyChanged();
     m_census = toCensusMap(dht::CensusSnapshot{});
     resetNodeList();
     m_statsSet.reset();
@@ -1292,6 +1417,17 @@ void DhtController::applySnapshot(const dht::EngineSnapshot &snapshot)
     };
     addEstimate(QStringLiteral("IPv4"), c.sizeV4, c.stats ? &c.stats->ipv4 : nullptr, true);
     addEstimate(QStringLiteral("IPv6"), c.sizeV6, c.stats ? &c.stats->ipv6 : nullptr, snapshot.ipv6.enabled);
+
+    m_lookupPerformance.clear();
+    m_lookupPerformance.append(lookupMap(QStringLiteral("IPv4"), c.lookupV4));
+    if (snapshot.ipv6.enabled)
+        m_lookupPerformance.append(lookupMap(QStringLiteral("IPv6"), c.lookupV6));
+    if (c.history != m_historySource) {
+        m_historySource = c.history;
+        m_history = historyMap(m_historySource ? *m_historySource : std::vector<dht::HistorySample>{},
+                               ShownHistoryClients);
+        emit historyChanged();
+    }
 
     m_census = toCensusMap(snapshot.census);
     if (now - oldest.atMs >= 250) {

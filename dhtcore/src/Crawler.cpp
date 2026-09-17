@@ -54,10 +54,15 @@ void Crawler::setMonitoring(bool on)
         m_tickClock.start();
         seed(now);
         m_timer.start();
+        // Rates are measured from here; the first sample follows shortly.
+        m_historyCounters = {now, m_queries, m_answers + m_errors, m_featureQueries,
+                             m_inbound ? m_inbound->queries() : 0};
+        m_nextHistoryMs = now + std::min<qint64>(m_config.historyIntervalMs, 5000);
     } else {
         m_timer.stop();
         m_monitoredMs += now - m_monitoringSinceMs;
         refreshStats(now);  // what was found stays on view, up to date
+        sampleHistory(now);
     }
 }
 
@@ -125,6 +130,89 @@ void Crawler::tick()
     }
     if (now >= m_nextStatsMs)
         refreshStats(now);
+    if (m_config.historyIntervalMs > 0 && now >= m_nextHistoryMs) {
+        m_nextHistoryMs = now + m_config.historyIntervalMs;
+        sampleHistory(now);
+    }
+}
+
+void Crawler::sampleHistory(qint64 now)
+{
+    if (m_config.historyIntervalMs <= 0 || now - m_historyCounters.atMs <= 0)
+        return;
+    if (!m_stats || now - m_stats->computedAtMs > m_config.historyIntervalMs)
+        refreshStats(now);
+    const NetworkStatsSet &st = *m_stats;
+    const NetworkStats &all = st.all;
+    using M = Metric;
+
+    HistorySample s;
+    s.atMs = now;
+    s.spanMs = now - m_historyCounters.atMs;
+    // A pause (or the very first sample) leaves a gap on the charts.
+    s.gapBefore = m_lastHistoryMs < 0 || m_historyCounters.atMs - m_lastHistoryMs > m_config.historyIntervalMs;
+
+    s.set(M::HeardIps, all.heardIps);
+    s.set(M::ConnectedIps, all.connectedIps);
+    s.set(M::AnsweringIps, all.answeringIps);
+
+    double size = 0;
+    bool anySize = false;
+    for (int f = 0; f < 2; ++f) {
+        const SizeEstimate e = m_size[f].summary();
+        const NetworkStats &fs = f == 0 ? st.ipv4 : st.ipv6;
+        if (e.samples > 0 && e.median > 0) {
+            size += e.median / fs.nodesPerIp();
+            anySize = true;
+        }
+    }
+    if (anySize)
+        s.set(M::SizeEstimate, size);
+
+    const double seconds = double(s.spanMs) / 1000.0;
+    const qint64 inbound = m_inbound ? m_inbound->queries() : 0;
+    s.set(M::QueriesPerSecond, double(m_queries - m_historyCounters.queries) / seconds);
+    s.set(M::AnswersPerSecond, double(m_answers + m_errors - m_historyCounters.answers) / seconds);
+    s.set(M::FeatureChecksPerSecond, double(m_featureQueries - m_historyCounters.features) / seconds);
+    s.set(M::InboundPerSecond, double(inbound - m_historyCounters.inbound) / seconds);
+    m_historyCounters = {now, m_queries, m_answers + m_errors, m_featureQueries, inbound};
+
+    if (all.rttMedianMs >= 0)
+        s.set(M::RttMedianMs, all.rttMedianMs);
+    if (all.answeringIps > 0)
+        s.set(M::Bep42Share, all.bep42[int(bep42::Status::Compliant)] / all.answeringIps);
+    const auto share = [&](M metric, const FeatureTally &t) {
+        if (t.tested > 0)
+            s.set(metric, t.yes / t.tested);
+    };
+    share(M::Bep51Share, all.bep51);
+    share(M::Bep44Share, all.bep44);
+    share(M::SendsIpShare, all.sendsIp);
+
+    s.set(M::Flagged, st.suspicious.flaggedCount);
+    s.set(M::ManyNodes, st.suspicious.manyNodesCount);
+    s.set(M::DenseSubnets, st.suspicious.denseSubnetCount);
+    s.set(M::SharedIds, st.suspicious.sharedIdCount);
+    s.set(M::DepartedPerHour, all.churn.departedLastHour);
+    s.set(M::ReturnedPerHour, all.churn.returnedLastHour);
+
+    // Lookups: both families' latest, weighted by how many each has.
+    LookupPerformance p4 = m_lookups[0].summary();
+    const LookupPerformance p6 = m_lookups[1].summary();
+    const LookupPerformance &p = p6.samples > p4.samples ? p6 : p4;
+    if (p.samples > 0) {
+        s.set(M::LookupMedianMs, p.medianMs);
+        s.set(M::LookupMedianQueries, p.medianQueries);
+        s.set(M::LookupResponseRate, p.responseRate);
+    }
+
+    constexpr size_t ClientsKept = 10;
+    for (size_t i = 0; i < all.clients.size() && i < ClientsKept && all.answeringIps > 0; ++i)
+        s.clientShares.emplace_back(all.clients[i].name, all.clients[i].count / all.answeringIps);
+
+    m_lastHistoryMs = now;
+    m_history.add(std::move(s));
+    m_historyView = std::make_shared<const std::vector<HistorySample>>(m_history.samples());
 }
 
 void Crawler::seed(qint64 now)
@@ -154,11 +242,11 @@ void Crawler::widen()
         const Family family = node->family();
         QPointer<Crawler> self(this);
         const NodeId target = NodeId::random();
-        node->findNode(target, [self, family, target](const Lookup::Result &result) {
+        node->findNode(target, [self, family](const Lookup::Result &result) {
             if (!self)
                 return;
             self->m_widening[int(family)] = false;
-            self->recordLookup(family, target, result.closest);
+            self->recordLookup(family, result);
         });
     }
 }
@@ -172,19 +260,25 @@ void Crawler::estimateSize()
         ++m_estimating[int(family)];
         const NodeId target = NodeId::random();
         QPointer<Crawler> self(this);
-        node->findNode(target, [self, family, target](const Lookup::Result &result) {
+        node->findNode(target, [self, family](const Lookup::Result &result) {
             if (!self)
                 return;
             --self->m_estimating[int(family)];
-            self->recordLookup(family, target, result.closest);
+            self->recordLookup(family, result);
         });
     }
 }
 
-void Crawler::recordLookup(Family family, const NodeId &target, const std::vector<Lookup::Contact> &closest)
+void Crawler::recordLookup(Family family, const Lookup::Result &result)
 {
-    // Every random-target lookup is a size sample, and its nodes are worth
-    // knowing about.
+    // Every random-target lookup is a size sample and a measure of how
+    // lookups perform, and its nodes are worth knowing about.
+    const std::vector<Lookup::Contact> &closest = result.closest;
+    const NodeId &target = result.target;
+    if (result.queried > 0) {
+        m_lookups[int(family)].add(result.durationMs, result.queried, result.responded, result.hops,
+                                   int(closest.size()) >= Lookup::K);
+    }
     std::vector<NodeId> ids;
     ids.reserve(closest.size());
     for (const Lookup::Contact &contact : closest)
@@ -349,10 +443,13 @@ void Crawler::onReply(Ref ref, const RpcReply &reply)
             // A response or an error: either way the node is alive.
             ++(reply.status == RpcReply::Status::Response ? m_answers : m_errors);
             const bool wasAnswering = entry.state == CatalogEntry::State::Responsive;
+            const bool wasGone = entry.state == CatalogEntry::State::Gone;
             entry.failures = 0;
             entry.lastAnswered = m_catalog->stamp(now);
-            if (!wasAnswering)
+            if (!wasAnswering) {
                 entry.answeringSince = entry.lastAnswered;
+                entry.set(CatalogEntry::Rejoined, wasGone);
+            }
             entry.rttMs = quint16(std::clamp(reply.rttMs, 0, int(CatalogEntry::NoRtt) - 1));
             entry.setVersion(reply.message.version);
             if (const auto id = reply.message.senderId()) {
@@ -621,6 +718,9 @@ CrawlSnapshot Crawler::snapshot() const
     s.stats = m_stats;
     s.sizeV4 = m_size[0].summary();
     s.sizeV6 = m_size[1].summary();
+    s.lookupV4 = m_lookups[0].summary();
+    s.lookupV6 = m_lookups[1].summary();
+    s.history = m_historyView;
 
     // Discovering while any node has yet to answer or run out of tries.
     if (!m_monitoring)
