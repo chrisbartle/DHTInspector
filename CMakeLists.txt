@@ -25,6 +25,17 @@ qt_standard_project_setup(REQUIRES 6.5)
 # the generated modules apart from the binaries.
 set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/qml_modules")
 
+# A build directory made before that change still holds the old module
+# directory, which sits exactly where the binary goes, so the build fails
+# the same way until it is removed. Say so plainly rather than leaving it
+# to the linker.
+if(CMAKE_EXECUTABLE_SUFFIX STREQUAL "" AND IS_DIRECTORY "${CMAKE_BINARY_DIR}/${PROJECT_NAME}")
+    message(FATAL_ERROR
+        "${CMAKE_BINARY_DIR}/${PROJECT_NAME} is a directory left by an earlier build, and the "
+        "executable of the same name cannot be written there. Remove it and build again:\n"
+        "    rm -rf \"${CMAKE_BINARY_DIR}/${PROJECT_NAME}\"")
+endif()
+
 # Our .qml files live in a subdirectory, so let Qt generate the extra
 # qmldir files for it rather than hand-maintaining them.
 if(QT_KNOWN_POLICY_QTP0004)
