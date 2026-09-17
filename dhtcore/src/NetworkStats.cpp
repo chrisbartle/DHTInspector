@@ -56,23 +56,6 @@ struct Accumulator
     }
 };
 
-// The "v" field as it is kept in the catalogue, packed into one number:
-// length in the high half, the first four bytes in the low half.
-quint64 versionKey(const CatalogEntry &e)
-{
-    return (quint64(e.versionLength) << 32) | (quint64(e.version[0]) << 24) | (quint64(e.version[1]) << 16)
-           | (quint64(e.version[2]) << 8) | quint64(e.version[3]);
-}
-
-QByteArray versionBytes(quint64 key)
-{
-    const int length = int(key >> 32);
-    QByteArray out(length, '\0');
-    for (int i = 0; i < std::min(length, 4); ++i)
-        out[i] = char((key >> (24 - 8 * i)) & 0xff);
-    return out;
-}
-
 void sortTallies(std::vector<ClientTally> &tallies)
 {
     std::sort(tallies.begin(), tallies.end(), [](const ClientTally &a, const ClientTally &b) {
@@ -103,14 +86,8 @@ NetworkStats summarise(const Accumulator &a, const QHash<quint64, ClientInfo> &d
     QHash<QString, QString> nameKind;
     for (auto it = a.versions.cbegin(); it != a.versions.cend(); ++it) {
         const ClientInfo &info = decoded[it.key()];
-        const bool known = info.kind == ClientInfo::Kind::Known;
-        const QString name = known ? info.name : info.display();
-        QString version;
-        if (known) {
-            version = !info.version.isEmpty()
-                          ? info.version
-                          : QStringLiteral("bytes %1").arg(QString::fromLatin1(info.raw.mid(2).toHex(' ')));
-        }
+        const QString name = clientLabel(info);
+        const QString version = versionLabel(info);
         byName[name] += it.value();
         nameKind.insert(name, clientKindName(info.kind));
         const QString key = name + QChar(0) + version;
@@ -227,7 +204,7 @@ NetworkStatsSet computeNetworkStats(const NodeCatalog &catalog, qint64 nowMs, in
                 const CatalogEntry &e = catalog.at(entries[i].second);
                 if (e.state != CatalogEntry::State::Responsive)
                     continue;
-                a.versions[versionKey(e)] += weight;
+                a.versions[e.versionKey()] += weight;
                 a.bep42[std::min<int>(e.bep42, int(a.bep42.size()) - 1)] += weight;
                 if (e.rttMs != CatalogEntry::NoRtt) {
                     a.rtt[std::min<int>(e.rttMs, NetworkStats::MaxRttMs)] += weight;
@@ -247,7 +224,7 @@ NetworkStatsSet computeNetworkStats(const NodeCatalog &catalog, qint64 nowMs, in
     // Distinct version fields are few, so each is decoded once.
     QHash<quint64, ClientInfo> decoded;
     for (auto it = all.versions.cbegin(); it != all.versions.cend(); ++it)
-        decoded.insert(it.key(), decodeClientVersion(versionBytes(it.key())));
+        decoded.insert(it.key(), decodeClientVersion(CatalogEntry::versionBytesForKey(it.key())));
 
     NetworkStatsSet set;
     set.ipv4 = summarise(families[0], decoded, topPorts);

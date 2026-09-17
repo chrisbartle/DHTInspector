@@ -52,6 +52,10 @@ struct CatalogEntry
     // zero; the length is kept, so an overlong field still shows as one.
     QByteArray versionBytes() const;
     void setVersion(const QByteArray &v);
+    // The version field packed into one number, for grouping and caching:
+    // length in the high half, the first four bytes in the low half.
+    quint64 versionKey() const;
+    static QByteArray versionBytesForKey(quint64 key);
 };
 
 // Every node the scan has come across, indexed by address and port. Slots

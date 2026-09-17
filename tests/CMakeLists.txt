@@ -12,6 +12,7 @@ qt_add_executable(dhtcore_tests
     TestKrpc.cpp
     TestNetworkStats.cpp
     TestNodeCatalog.cpp
+    TestNodeList.cpp
     TestPortMapper.cpp
     TestRoutingTable.cpp
     TestRpcManager.cpp

@@ -257,6 +257,18 @@ void DhtEngine::cancelCensus()
     scheduleSnapshot();
 }
 
+void DhtEngine::queryNodes(const NodeQuery &query, quint64 requestId)
+{
+    NodeListPage page = dht::queryNodes(m_catalog, query, nowMs(), m_labels);
+    page.requestId = requestId;
+    emit nodePageReady(page);
+}
+
+void DhtEngine::exportNodes(const NodeQuery &query, quint64 requestId)
+{
+    emit nodeExportReady(requestId, std::make_shared<NodeExport>(collectNodes(m_catalog, query, nowMs(), m_labels)));
+}
+
 void DhtEngine::setCatalogCap(int cap)
 {
     m_config.catalogCap = cap;

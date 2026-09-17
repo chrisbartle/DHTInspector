@@ -20,7 +20,7 @@ Two jobs, one tool:
 | Setup tab | Working |
 | Search tab | Working: peer and item lookups, announce, BEP 44 publishing |
 | Data Store tab | Working: announced peers with addresses and expiry |
-| Global Health tab | In progress: network scan, address counts, quick and precise size, client/round-trip/BEP 42/port statistics; node list and feature checks to come |
+| Global Health tab | In progress: network scan, address counts, quick and precise size, statistics, filterable node list with export; feature checks to come |
 | Probe Node tab | Working: one node, any query, replies decoded in full |
 
 ### What the engine does
@@ -84,6 +84,14 @@ Two jobs, one tool:
   in a slice given how many nodes it runs (Horvitz-Thompson), so busy hosts
   are not multiplied. Eight slices per family give a mean and a 95%
   interval.
+- Node list: every node found, one row per address and port, filtered by
+  family, status, client, version, BEP 42, round trip, address or subnet,
+  port and nodes per address, sorted and paged by the engine so it stays
+  quick with millions of entries. Each address opens the node on the Probe
+  tab.
+- Export, only when asked: every node matching the filters as CSV (written
+  on a background thread), or the statistics, size estimates and precise
+  count as JSON. Nothing is saved otherwise.
 - BEP 43 read-only mode, off by default and switchable while running: every
   query we send carries `ro`, and every query we receive is dropped without a
   reply, so the store gains nothing while it is on. Our own lookups still work.

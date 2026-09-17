@@ -46,6 +46,7 @@ qt_add_qml_module(DHTInspector
     VERSION 1.0
     SOURCES
         src/DhtController.h src/DhtController.cpp
+        src/CatalogModels.h src/CatalogModels.cpp
         src/DataStoreModels.h src/DataStoreModels.cpp
         src/NodeListModel.h src/NodeListModel.cpp
         src/ProbeModels.h src/ProbeModels.cpp
@@ -62,6 +63,8 @@ qt_add_qml_module(DHTInspector
         qml/ThemedSwitch.qml
         qml/ThemedSlider.qml
         qml/ThemedTextField.qml
+        qml/ThemedComboBox.qml
+        qml/NodeListPanel.qml
         qml/EmptyState.qml
         qml/SearchPage.qml
         qml/SetupPage.qml

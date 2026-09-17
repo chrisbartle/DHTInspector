@@ -42,4 +42,12 @@ QString clientName(const QString &code);
 
 QString clientKindName(ClientInfo::Kind kind);
 
+// How statistics and the node list name a client: the client's name when
+// the code is known, otherwise what is wrong with the field ("no version
+// sent", "unknown client ZZ", ...).
+QString clientLabel(const ClientInfo &info);
+// Its version for display: the decoded version, "bytes ab cd" when the
+// layout is unpublished, empty for anything but a known client.
+QString versionLabel(const ClientInfo &info);
+
 } // namespace dht

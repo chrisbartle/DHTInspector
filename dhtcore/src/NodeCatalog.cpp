@@ -68,6 +68,21 @@ QByteArray CatalogEntry::versionBytes() const
     return out;
 }
 
+quint64 CatalogEntry::versionKey() const
+{
+    return (quint64(versionLength) << 32) | (quint64(version[0]) << 24) | (quint64(version[1]) << 16)
+           | (quint64(version[2]) << 8) | quint64(version[3]);
+}
+
+QByteArray CatalogEntry::versionBytesForKey(quint64 key)
+{
+    const int length = int(key >> 32);
+    QByteArray out(length, '\0');
+    for (int i = 0; i < std::min(length, 4); ++i)
+        out[i] = char((key >> (24 - 8 * i)) & 0xff);
+    return out;
+}
+
 void CatalogEntry::setVersion(const QByteArray &v)
 {
     versionLength = quint8(std::min<qsizetype>(v.size(), 254));

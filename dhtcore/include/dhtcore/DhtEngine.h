@@ -4,6 +4,7 @@
 #include "dhtcore/Crawler.h"
 #include "dhtcore/DhtNode.h"
 #include "dhtcore/NodeCatalog.h"
+#include "dhtcore/NodeList.h"
 #include "dhtcore/PortMapper.h"
 #include "dhtcore/Snapshot.h"
 #include "dhtcore/Support.h"
@@ -92,6 +93,11 @@ public:
     void startCensus();
     void cancelCensus();
     bool isCensusRunning() const { return m_census && m_census->isRunning(); }
+
+    // The node list: one page of the catalogue per query (nodePageReady),
+    // or everything matching, copied out for export (nodeExportReady).
+    void queryNodes(const dht::NodeQuery &query, quint64 requestId);
+    void exportNodes(const dht::NodeQuery &query, quint64 requestId);
     const NodeCatalog &catalog() const { return m_catalog; }
     qint64 sendLimit() const { return m_budget.limit(); }
 
@@ -132,6 +138,8 @@ signals:
     void itemSearchFinished(const dht::ItemSearchResult &result);
     void publishFinished(const dht::PublishResult &result);
     void probeFinished(const dht::ProbeResult &result);
+    void nodePageReady(const dht::NodeListPage &page);
+    void nodeExportReady(quint64 requestId, std::shared_ptr<dht::NodeExport> nodes);
     void notice(const QString &message, bool isError);
 
 private:
@@ -146,6 +154,7 @@ private:
     NodeCatalog m_catalog;
     Crawler *m_crawler = nullptr;
     Census *m_census = nullptr;
+    ClientLabelCache m_labels;
     DhtNode *m_v4 = nullptr;
     DhtNode *m_v6 = nullptr;
     QString m_v6Error;

@@ -943,14 +943,9 @@ ScrollView {
             }
         }
 
-        Panel {
+        NodeListPanel {
             Layout.fillWidth: true
-            title: qsTr("Nodes")
-            subtitle: qsTr("Every node found, filterable, with each address linking to the Probe tab.")
-            EmptyState {
-                message: qsTr("Not built yet")
-                implicitHeight: 140
-            }
+            active: page.visible
         }
     }
 }

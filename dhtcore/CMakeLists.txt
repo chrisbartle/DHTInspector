@@ -15,6 +15,7 @@ qt_add_library(dhtcore STATIC
     include/dhtcore/NetworkStats.h  src/NetworkStats.cpp
     include/dhtcore/NodeCatalog.h   src/NodeCatalog.cpp
     include/dhtcore/NodeId.h        src/NodeId.cpp
+    include/dhtcore/NodeList.h      src/NodeList.cpp
     include/dhtcore/PortMapper.h    src/PortMapper.cpp
     include/dhtcore/RoutingTable.h  src/RoutingTable.cpp
     include/dhtcore/RpcManager.h    src/RpcManager.cpp

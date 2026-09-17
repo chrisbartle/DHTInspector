@@ -129,6 +129,20 @@ ClientInfo decodeClientVersion(const QByteArray &v)
     return info;
 }
 
+QString clientLabel(const ClientInfo &info)
+{
+    return info.kind == ClientInfo::Kind::Known ? info.name : info.display();
+}
+
+QString versionLabel(const ClientInfo &info)
+{
+    if (info.kind != ClientInfo::Kind::Known)
+        return {};
+    if (!info.version.isEmpty())
+        return info.version;
+    return QStringLiteral("bytes %1").arg(QString::fromLatin1(info.raw.mid(2).toHex(' ')));
+}
+
 QString ClientInfo::display() const
 {
     switch (kind) {

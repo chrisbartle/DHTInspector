@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CatalogModels.h"
 #include "DataStoreModels.h"
 #include "ProbeModels.h"
 #include "SearchModels.h"
@@ -7,13 +8,16 @@
 #include "StatusTypes.h"
 
 #include "dhtcore/NodeCatalog.h"
+#include "dhtcore/NodeList.h"
 #include "dhtcore/Snapshot.h"
 
 #include <QElapsedTimer>
 #include <QObject>
 #include <QStringList>
+#include <QUrl>
 
 #include <deque>
+#include <thread>
 #include <QtQml/qqmlregistration.h>
 
 class QThread;
@@ -48,6 +52,10 @@ class DhtController : public QObject
     Q_PROPERTY(QVariantMap networkStats READ networkStats NOTIFY networkStatsChanged)
     Q_PROPERTY(QVariantList sizeEstimates READ sizeEstimates NOTIFY snapshotChanged)
     Q_PROPERTY(QVariantMap census READ census NOTIFY snapshotChanged)
+    Q_PROPERTY(CatalogListModel *nodeList READ nodeList CONSTANT)
+    Q_PROPERTY(QVariantMap nodeListInfo READ nodeListInfo NOTIFY nodeListChanged)
+    Q_PROPERTY(QStringList clientNames READ clientNames NOTIFY networkStatsChanged)
+    Q_PROPERTY(QVariantMap exportStatus READ exportStatus NOTIFY exportStatusChanged)
     Q_PROPERTY(QString nodeIdV4 READ nodeIdV4 WRITE setNodeIdV4 NOTIFY nodeIdV4Changed)
     Q_PROPERTY(QString nodeIdV6 READ nodeIdV6 WRITE setNodeIdV6 NOTIFY nodeIdV6Changed)
 
@@ -122,6 +130,30 @@ public:
     QVariantMap census() const { return m_census; }
     Q_INVOKABLE void startCensus();
     Q_INVOKABLE void cancelCensus();
+
+    // The node list. A query is a map of filters: family ("any", "ipv4",
+    // "ipv6"), states (list of state names), client, version, bep42
+    // ("any" or a status name), minRtt and maxRtt (ms, -1 for none),
+    // address (address or subnet), port (0 for any), minNodes, sort
+    // ("address", "rtt", "lastAnswered", "firstSeen", "client",
+    // "nodesAtAddress"), descending, offset and limit.
+    CatalogListModel *nodeList() const { return m_nodeList; }
+    QVariantMap nodeListInfo() const { return m_nodeListInfo; }
+    Q_INVOKABLE void setNodeQuery(const QVariantMap &query);
+    Q_INVOKABLE void refreshNodeList();
+    Q_INVOKABLE void showNodePage(int offset);
+    // Empty when acceptable, otherwise why not.
+    Q_INVOKABLE QString validateAddressFilter(const QString &text) const;
+    // Client names seen among answering addresses, most common first, and
+    // the versions seen for one of them.
+    QStringList clientNames() const;
+    Q_INVOKABLE QStringList versionsFor(const QString &client) const;
+
+    // Writing results out, only when asked: every node matching the current
+    // filter as CSV, or the statistics and counts as JSON.
+    QVariantMap exportStatus() const { return m_exportStatus; }
+    Q_INVOKABLE void exportNodes(const QUrl &file);
+    Q_INVOKABLE void exportSummary(const QUrl &file);
 
     // Node IDs as typed, normally 40 hex digits. Editable while stopped;
     // while running they follow the engine, which may replace them (BEP 42).
@@ -210,6 +242,8 @@ signals:
     void catalogCapChanged();
     void statsFamilyChanged();
     void networkStatsChanged();
+    void nodeListChanged();
+    void exportStatusChanged();
     void nodeIdV4Changed();
     void nodeIdV6Changed();
     void snapshotChanged();
@@ -260,6 +294,23 @@ private:
     QVariantList m_sizeEstimates;
     QVariantMap m_census;
     void buildNetworkStats();
+
+    CatalogListModel *m_nodeList;
+    dht::NodeQuery m_nodeQuery;
+    QVariantMap m_nodeListInfo;
+    quint64 m_nodeRequestId = 0;
+    bool m_nodeQueryInFlight = false;
+    bool m_nodeQueryAgain = false;
+    void sendNodeQuery();
+    void applyNodePage(const dht::NodeListPage &page);
+    void resetNodeList();
+
+    QVariantMap m_exportStatus;
+    quint64 m_exportRequestId = 0;
+    QString m_exportPath;
+    std::thread m_exportThread;
+    void setExportStatus(bool busy, const QString &message, bool isError);
+    void writeExport(std::shared_ptr<dht::NodeExport> nodes);
 
     // Recent byte totals, for the transfer rates.
     struct TrafficSample

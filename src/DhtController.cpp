@@ -4,12 +4,20 @@
 #include "dhtcore/ClientVersion.h"
 #include "dhtcore/DhtEngine.h"
 
+#include <QCoreApplication>
+#include <QDateTime>
 #include <QHostInfo>
+#include <QJsonDocument>
+#include <QLocale>
+#include <QPointer>
+#include <QSaveFile>
 #include <QRegularExpression>
 #include <QTime>
 // Settings persistence is disabled; see DhtController::DhtController().
 // #include <QSettings>
 #include <QThread>
+
+#include <limits>
 
 namespace {
 
@@ -187,6 +195,7 @@ DhtController::DhtController(QObject *parent)
     , m_storedItems(new StoredItemModel(this))
     , m_peerResults(new PeerResultModel(this))
     , m_probeHistory(new ProbeHistoryModel(this))
+    , m_nodeList(new CatalogListModel(this))
 {
     qRegisterMetaType<dht::EngineSnapshot>();
     qRegisterMetaType<dht::StorageSnapshot>();
@@ -194,6 +203,11 @@ DhtController::DhtController(QObject *parent)
     qRegisterMetaType<dht::ItemSearchResult>();
     qRegisterMetaType<dht::PublishResult>();
     qRegisterMetaType<dht::ProbeResult>();
+    qRegisterMetaType<dht::NodeQuery>();
+    qRegisterMetaType<dht::NodeListPage>();
+    qRegisterMetaType<std::shared_ptr<dht::NodeExport>>();
+    resetNodeList();
+    setExportStatus(false, QString(), false);
 
     // DHT Inspector is a standalone utility with no preconditions: every
     // launch starts from the defaults in DhtController.h and nothing is saved
@@ -214,6 +228,8 @@ DhtController::DhtController(QObject *parent)
 DhtController::~DhtController()
 {
     destroyEngine();
+    if (m_exportThread.joinable())
+        m_exportThread.join();
 }
 
 QString DhtController::statusText() const
@@ -414,81 +430,357 @@ QVariantList rttBins(const std::vector<double> &histogram, double samples)
 
 } // namespace
 
+namespace {
+
+QVariantMap addressCounts(const dht::NetworkStats &n)
+{
+    return QVariantMap{
+        {QStringLiteral("heardIps"), n.heardIps},
+        {QStringLiteral("connectedIps"), n.connectedIps},
+        {QStringLiteral("answeringIps"), n.answeringIps},
+        {QStringLiteral("unroutableIps"), n.unroutableIps},
+        {QStringLiteral("multiNodeIps"), n.multiNodeIps},
+        {QStringLiteral("maxNodesPerIp"), n.maxNodesPerIp},
+        {QStringLiteral("answeringNodes"), n.answeringNodes},
+    };
+}
+
+// Everything about one family's statistics, listing at most `shownClients`
+// and `shownVersions` before folding the rest.
+QVariantMap statsMap(const dht::NetworkStats &s, int shownClients, int shownVersions, int shownPorts)
+{
+    QVariantMap out;
+    out.insert(QStringLiteral("counts"), addressCounts(s));
+    out.insert(QStringLiteral("answeringIps"), s.answeringIps);
+    out.insert(QStringLiteral("clients"), talliesFor(s.clients, shownClients, s.answeringIps));
+    out.insert(QStringLiteral("versions"), talliesFor(s.versions, shownVersions, s.answeringIps));
+    out.insert(QStringLiteral("distinctClients"), int(s.clients.size()));
+    out.insert(QStringLiteral("distinctVersions"), int(s.versions.size()));
+    double noVersion = 0;
+    for (const dht::ClientTally &t : s.clients) {
+        if (t.kind == QLatin1String("absent"))
+            noVersion += t.count;
+    }
+    out.insert(QStringLiteral("noVersionShare"), shareOf(noVersion, s.answeringIps));
+
+    using dht::bep42::Status;
+    const auto bep = [&](Status status) { return s.bep42[int(status)]; };
+    out.insert(QStringLiteral("bep42"), QVariantMap{
+        {QStringLiteral("compliant"), bep(Status::Compliant)},
+        {QStringLiteral("noncompliant"), bep(Status::NonCompliant)},
+        {QStringLiteral("exempt"), bep(Status::Exempt)},
+        {QStringLiteral("unknown"), bep(Status::Unknown)},
+    });
+
+    QVariantList bins = rttBins(s.rttHistogram, s.rttWeight);
+    double peak = 0;
+    for (const QVariant &bin : std::as_const(bins))
+        peak = std::max(peak, bin.toMap().value(QStringLiteral("share")).toDouble());
+    out.insert(QStringLiteral("rtt"), QVariantMap{
+        {QStringLiteral("samples"), s.rttWeight},
+        {QStringLiteral("mean"), s.rttMeanMs},
+        {QStringLiteral("median"), s.rttMedianMs},
+        {QStringLiteral("p90"), s.rttP90Ms},
+        {QStringLiteral("p99"), s.rttP99Ms},
+        {QStringLiteral("bins"), bins},
+        {QStringLiteral("peakShare"), peak},
+    });
+
+    QVariantList ports;
+    for (size_t i = 0; i < s.topPorts.size() && int(i) < shownPorts; ++i) {
+        ports.append(QVariantMap{
+            {QStringLiteral("port"), s.topPorts[i].first},
+            {QStringLiteral("count"), s.topPorts[i].second},
+            {QStringLiteral("share"), shareOf(s.topPorts[i].second, s.answeringIps)},
+        });
+    }
+    out.insert(QStringLiteral("ports"), QVariantMap{
+        {QStringLiteral("distinct"), s.distinctPorts},
+        {QStringLiteral("defaultCount"), s.defaultPortCount},
+        {QStringLiteral("defaultShare"), shareOf(s.defaultPortCount, s.answeringIps)},
+        {QStringLiteral("top"), ports},
+    });
+    return out;
+}
+
+} // namespace
+
 void DhtController::buildNetworkStats()
 {
     QVariantMap out;
-    out.insert(QStringLiteral("available"), bool(m_statsSet));
     if (m_statsSet) {
         const dht::NetworkStats &s = m_statsFamily == QLatin1String("ipv4") ? m_statsSet->ipv4
                                      : m_statsFamily == QLatin1String("ipv6") ? m_statsSet->ipv6
                                                                                 : m_statsSet->all;
+        out = statsMap(s, ShownClients, ShownVersions, ShownPorts);
         out.insert(QStringLiteral("computeMs"), m_statsSet->computeMs);
-        const auto counts = [](const dht::NetworkStats &n) {
-            return QVariantMap{
-                {QStringLiteral("heardIps"), n.heardIps},
-                {QStringLiteral("connectedIps"), n.connectedIps},
-                {QStringLiteral("answeringIps"), n.answeringIps},
-                {QStringLiteral("unroutableIps"), n.unroutableIps},
-                {QStringLiteral("multiNodeIps"), n.multiNodeIps},
-                {QStringLiteral("maxNodesPerIp"), n.maxNodesPerIp},
-                {QStringLiteral("answeringNodes"), n.answeringNodes},
-            };
-        };
-        out.insert(QStringLiteral("counts"), counts(s));
-        out.insert(QStringLiteral("totals"), counts(m_statsSet->all));  // whatever the selected family
-        out.insert(QStringLiteral("answeringIps"), s.answeringIps);
-
-        out.insert(QStringLiteral("clients"), talliesFor(s.clients, ShownClients, s.answeringIps));
-        out.insert(QStringLiteral("versions"), talliesFor(s.versions, ShownVersions, s.answeringIps));
-        out.insert(QStringLiteral("distinctClients"), int(s.clients.size()));
-        out.insert(QStringLiteral("distinctVersions"), int(s.versions.size()));
-        double noVersion = 0;
-        for (const dht::ClientTally &t : s.clients) {
-            if (t.kind == QLatin1String("absent"))
-                noVersion += t.count;
-        }
-        out.insert(QStringLiteral("noVersionShare"), shareOf(noVersion, s.answeringIps));
-
-        using dht::bep42::Status;
-        const auto bep = [&](Status status) { return s.bep42[int(status)]; };
-        out.insert(QStringLiteral("bep42"), QVariantMap{
-            {QStringLiteral("compliant"), bep(Status::Compliant)},
-            {QStringLiteral("noncompliant"), bep(Status::NonCompliant)},
-            {QStringLiteral("exempt"), bep(Status::Exempt)},
-            {QStringLiteral("unknown"), bep(Status::Unknown)},
-        });
-
-        QVariantList bins = rttBins(s.rttHistogram, s.rttWeight);
-        double peak = 0;
-        for (const QVariant &bin : std::as_const(bins))
-            peak = std::max(peak, bin.toMap().value(QStringLiteral("share")).toDouble());
-        out.insert(QStringLiteral("rtt"), QVariantMap{
-            {QStringLiteral("samples"), s.rttWeight},
-            {QStringLiteral("mean"), s.rttMeanMs},
-            {QStringLiteral("median"), s.rttMedianMs},
-            {QStringLiteral("p90"), s.rttP90Ms},
-            {QStringLiteral("p99"), s.rttP99Ms},
-            {QStringLiteral("bins"), bins},
-            {QStringLiteral("peakShare"), peak},
-        });
-
-        QVariantList ports;
-        for (size_t i = 0; i < s.topPorts.size() && int(i) < ShownPorts; ++i) {
-            ports.append(QVariantMap{
-                {QStringLiteral("port"), s.topPorts[i].first},
-                {QStringLiteral("count"), s.topPorts[i].second},
-                {QStringLiteral("share"), shareOf(s.topPorts[i].second, s.answeringIps)},
-            });
-        }
-        out.insert(QStringLiteral("ports"), QVariantMap{
-            {QStringLiteral("distinct"), s.distinctPorts},
-            {QStringLiteral("defaultCount"), s.defaultPortCount},
-            {QStringLiteral("defaultShare"), shareOf(s.defaultPortCount, s.answeringIps)},
-            {QStringLiteral("top"), ports},
-        });
+        out.insert(QStringLiteral("totals"), addressCounts(m_statsSet->all));  // whatever the selected family
     }
+    out.insert(QStringLiteral("available"), bool(m_statsSet));
     m_networkStats = out;
     emit networkStatsChanged();
+}
+
+// --- node list ----------------------------------------------------------------
+
+namespace {
+
+dht::NodeQuery::Sort sortFromName(const QString &name)
+{
+    using Sort = dht::NodeQuery::Sort;
+    if (name == QLatin1String("rtt"))
+        return Sort::RoundTrip;
+    if (name == QLatin1String("lastAnswered"))
+        return Sort::LastAnswered;
+    if (name == QLatin1String("firstSeen"))
+        return Sort::FirstSeen;
+    if (name == QLatin1String("client"))
+        return Sort::Client;
+    if (name == QLatin1String("nodesAtAddress"))
+        return Sort::NodesAtAddress;
+    return Sort::Address;
+}
+
+} // namespace
+
+void DhtController::resetNodeList()
+{
+    m_nodeList->clear();
+    m_nodeQueryInFlight = false;
+    m_nodeQueryAgain = false;
+    m_nodeListInfo = QVariantMap{
+        {QStringLiteral("matchedNodes"), 0},
+        {QStringLiteral("matchedAddresses"), 0},
+        {QStringLiteral("offset"), 0},
+        {QStringLiteral("limit"), m_nodeQuery.limit},
+        {QStringLiteral("queryMs"), 0},
+        {QStringLiteral("loaded"), false},
+        {QStringLiteral("error"), QString()},
+    };
+    emit nodeListChanged();
+}
+
+QString DhtController::validateAddressFilter(const QString &text) const
+{
+    QHostAddress address;
+    int bits = -1;
+    QString error;
+    return dht::parseAddressFilter(text, &address, &bits, &error) ? QString() : error;
+}
+
+void DhtController::setNodeQuery(const QVariantMap &q)
+{
+    dht::NodeQuery query;
+    const QString family = q.value(QStringLiteral("family")).toString();
+    if (family == QLatin1String("ipv4"))
+        query.family = dht::Family::IPv4;
+    else if (family == QLatin1String("ipv6"))
+        query.family = dht::Family::IPv6;
+
+    if (q.contains(QStringLiteral("states"))) {
+        query.states = 0;
+        const QStringList names = q.value(QStringLiteral("states")).toStringList();
+        for (auto state : {dht::CatalogEntry::State::New, dht::CatalogEntry::State::Responsive,
+                           dht::CatalogEntry::State::Silent, dht::CatalogEntry::State::Gone,
+                           dht::CatalogEntry::State::Unroutable}) {
+            if (names.contains(dht::stateName(state)))
+                query.states |= 1u << int(state);
+        }
+    }
+
+    query.client = q.value(QStringLiteral("client")).toString();
+    query.version = q.value(QStringLiteral("version")).toString().trimmed();
+    const QString bep = q.value(QStringLiteral("bep42")).toString();
+    for (auto status : {dht::bep42::Status::Unknown, dht::bep42::Status::Compliant,
+                        dht::bep42::Status::NonCompliant, dht::bep42::Status::Exempt}) {
+        if (bep == dht::bep42::statusName(status))
+            query.bep42 = status;
+    }
+    query.minRttMs = q.value(QStringLiteral("minRtt"), -1).toInt();
+    query.maxRttMs = q.value(QStringLiteral("maxRtt"), -1).toInt();
+    query.port = quint16(std::clamp(q.value(QStringLiteral("port"), 0).toInt(), 0, 65535));
+    query.minNodesAtAddress = std::max(0, q.value(QStringLiteral("minNodes"), 0).toInt());
+    query.sort = sortFromName(q.value(QStringLiteral("sort")).toString());
+    query.descending = q.value(QStringLiteral("descending")).toBool();
+    query.offset = std::max(0, q.value(QStringLiteral("offset"), 0).toInt());
+    query.limit = std::clamp(q.value(QStringLiteral("limit"), 100).toInt(), 1, 1000);
+
+    QString error;
+    if (!dht::parseAddressFilter(q.value(QStringLiteral("address")).toString(), &query.subnet, &query.subnetBits,
+                                 &error)) {
+        m_nodeListInfo.insert(QStringLiteral("error"), error);
+        emit nodeListChanged();
+        return;
+    }
+    m_nodeListInfo.insert(QStringLiteral("error"), QString());
+    m_nodeQuery = query;
+    refreshNodeList();
+}
+
+void DhtController::showNodePage(int offset)
+{
+    m_nodeQuery.offset = std::max(0, offset);
+    refreshNodeList();
+}
+
+void DhtController::refreshNodeList()
+{
+    if (!m_engine)
+        return;
+    if (m_nodeQueryInFlight) {
+        m_nodeQueryAgain = true;
+        return;
+    }
+    sendNodeQuery();
+}
+
+void DhtController::sendNodeQuery()
+{
+    m_nodeQueryInFlight = true;
+    m_nodeQueryAgain = false;
+    const quint64 id = ++m_nodeRequestId;
+    QMetaObject::invokeMethod(
+        m_engine, [engine = m_engine, query = m_nodeQuery, id] { engine->queryNodes(query, id); },
+        Qt::QueuedConnection);
+}
+
+void DhtController::applyNodePage(const dht::NodeListPage &page)
+{
+    m_nodeQueryInFlight = false;
+    if (page.requestId == m_nodeRequestId) {
+        m_nodeQuery.offset = page.offset;
+        m_nodeList->setRows(page.rows);
+        m_nodeListInfo.insert(QStringLiteral("matchedNodes"), page.matchedNodes);
+        m_nodeListInfo.insert(QStringLiteral("matchedAddresses"), page.matchedAddresses);
+        m_nodeListInfo.insert(QStringLiteral("offset"), page.offset);
+        m_nodeListInfo.insert(QStringLiteral("limit"), m_nodeQuery.limit);
+        m_nodeListInfo.insert(QStringLiteral("queryMs"), page.queryMs);
+        m_nodeListInfo.insert(QStringLiteral("loaded"), true);
+        emit nodeListChanged();
+    }
+    if (m_nodeQueryAgain && m_engine)
+        sendNodeQuery();
+}
+
+QStringList DhtController::clientNames() const
+{
+    QStringList names;
+    if (m_statsSet) {
+        for (const dht::ClientTally &t : m_statsSet->all.clients)
+            names << t.name;
+    }
+    return names;
+}
+
+QStringList DhtController::versionsFor(const QString &client) const
+{
+    QStringList versions;
+    if (m_statsSet) {
+        for (const dht::ClientTally &t : m_statsSet->all.versions) {
+            if (t.name == client && !t.version.isEmpty())
+                versions << t.version;
+        }
+    }
+    return versions;
+}
+
+// --- export -------------------------------------------------------------------
+
+void DhtController::setExportStatus(bool busy, const QString &message, bool isError)
+{
+    m_exportStatus = QVariantMap{
+        {QStringLiteral("busy"), busy},
+        {QStringLiteral("message"), message},
+        {QStringLiteral("error"), isError},
+    };
+    emit exportStatusChanged();
+}
+
+void DhtController::exportNodes(const QUrl &file)
+{
+    if (!m_engine || m_exportStatus.value(QStringLiteral("busy")).toBool())
+        return;
+    m_exportPath = file.isLocalFile() ? file.toLocalFile() : file.toString();
+    setExportStatus(true, tr("Collecting nodes…"), false);
+    const quint64 id = ++m_exportRequestId;
+    QMetaObject::invokeMethod(
+        m_engine, [engine = m_engine, query = m_nodeQuery, id] { engine->exportNodes(query, id); },
+        Qt::QueuedConnection);
+}
+
+void DhtController::writeExport(std::shared_ptr<dht::NodeExport> nodes)
+{
+    if (m_exportThread.joinable())
+        m_exportThread.join();
+    const qsizetype rows = qsizetype(nodes->entries.size());
+    setExportStatus(true, tr("Writing %1 nodes…").arg(QLocale().toString(rows)), false);
+
+    // Formatting millions of rows takes seconds, so it happens off both
+    // the UI and the engine threads.
+    QPointer<DhtController> self(this);
+    const QString path = m_exportPath;
+    const quint64 id = m_exportRequestId;
+    m_exportThread = std::thread([self, nodes = std::move(nodes), path, rows, id] {
+        QString error;
+        const bool ok = dht::writeNodesCsv(*nodes, path, &error);
+        QMetaObject::invokeMethod(self, [self, ok, error, path, rows, id] {
+            if (!self || id != self->m_exportRequestId)
+                return;
+            if (ok)
+                self->setExportStatus(false, tr("Wrote %1 nodes to %2").arg(QLocale().toString(rows), path), false);
+            else
+                self->setExportStatus(false, tr("Could not write %1: %2").arg(path, error), true);
+        });
+    });
+}
+
+void DhtController::exportSummary(const QUrl &file)
+{
+    const QString path = file.isLocalFile() ? file.toLocalFile() : file.toString();
+
+    QVariantMap summary{
+        {QStringLiteral("generatedAt"), QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+        {QStringLiteral("application"), QStringLiteral("DHT Inspector %1").arg(QCoreApplication::applicationVersion())},
+        {QStringLiteral("countedBy"), QStringLiteral("IP address")},
+        {QStringLiteral("sizeEstimates"), m_sizeEstimates},
+        {QStringLiteral("census"), m_census},
+    };
+    if (m_statsSet) {
+        const int all = std::numeric_limits<int>::max();
+        summary.insert(QStringLiteral("statistics"), QVariantMap{
+            {QStringLiteral("all"), statsMap(m_statsSet->all, all, all, all)},
+            {QStringLiteral("ipv4"), statsMap(m_statsSet->ipv4, all, all, all)},
+            {QStringLiteral("ipv6"), statsMap(m_statsSet->ipv6, all, all, all)},
+        });
+    }
+    const CrawlStatus &c = m_crawl;
+    summary.insert(QStringLiteral("scan"), QVariantMap{
+        {QStringLiteral("phase"), c.phase},
+        {QStringLiteral("nodesKnown"), c.known},
+        {QStringLiteral("nodesResponsive"), c.responsive},
+        {QStringLiteral("nodesSilent"), c.silent},
+        {QStringLiteral("nodesGone"), c.gone},
+        {QStringLiteral("nodesAwaiting"), c.notAsked},
+        {QStringLiteral("nodesUnreachable"), c.unroutable},
+        {QStringLiteral("queries"), c.queries},
+        {QStringLiteral("answers"), c.answers},
+        {QStringLiteral("errors"), c.errors},
+        {QStringLiteral("timeouts"), c.timeouts},
+        {QStringLiteral("scanningSeconds"), c.monitoredSeconds},
+        {QStringLiteral("nodeListCap"), c.cap},
+    });
+
+    QSaveFile out(path);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        setExportStatus(false, tr("Could not write %1: %2").arg(path, out.errorString()), true);
+        return;
+    }
+    out.write(QJsonDocument::fromVariant(summary).toJson(QJsonDocument::Indented));
+    if (!out.commit()) {
+        setExportStatus(false, tr("Could not write %1: %2").arg(path, out.errorString()), true);
+        return;
+    }
+    setExportStatus(false, tr("Wrote the summary to %1").arg(path), false);
 }
 
 void DhtController::startCensus()
@@ -608,6 +900,15 @@ void DhtController::startEngine()
                 if (generation == m_generation)
                     applyProbe(result);
             });
+    connect(m_engine, &dht::DhtEngine::nodePageReady, this, [this, generation](const dht::NodeListPage &page) {
+        if (generation == m_generation && m_running)
+            applyNodePage(page);
+    });
+    connect(m_engine, &dht::DhtEngine::nodeExportReady, this,
+            [this, generation](quint64 requestId, std::shared_ptr<dht::NodeExport> nodes) {
+                if (generation == m_generation && requestId == m_exportRequestId)
+                    writeExport(std::move(nodes));
+            });
     connect(m_engine, &dht::DhtEngine::storageSnapshotReady, this,
             [this, generation](const dht::StorageSnapshot &snapshot) {
                 if (generation == m_generation && m_running)
@@ -689,6 +990,7 @@ void DhtController::resetStatus()
     m_crawl = CrawlStatus{};
     m_sizeEstimates.clear();
     m_census = toCensusMap(dht::CensusSnapshot{});
+    resetNodeList();
     m_statsSet.reset();
     buildNetworkStats();
     m_traffic.clear();
