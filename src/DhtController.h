@@ -50,6 +50,8 @@ class DhtController : public QObject
     Q_PROPERTY(CrawlStatus crawl READ crawl NOTIFY snapshotChanged)
     Q_PROPERTY(QString statsFamily READ statsFamily WRITE setStatsFamily NOTIFY statsFamilyChanged)
     Q_PROPERTY(QVariantMap networkStats READ networkStats NOTIFY networkStatsChanged)
+    Q_PROPERTY(QVariantMap suspicious READ suspicious NOTIFY networkStatsChanged)
+    Q_PROPERTY(QVariantMap inbound READ inbound NOTIFY networkStatsChanged)
     Q_PROPERTY(QVariantList sizeEstimates READ sizeEstimates NOTIFY snapshotChanged)
     Q_PROPERTY(QVariantMap census READ census NOTIFY snapshotChanged)
     Q_PROPERTY(CatalogListModel *nodeList READ nodeList CONSTANT)
@@ -144,6 +146,9 @@ public:
     Q_INVOKABLE void showNodePage(int offset);
     // Empty when acceptable, otherwise why not.
     Q_INVOKABLE QString validateAddressFilter(const QString &text) const;
+    Q_INVOKABLE QString validateIdPrefixFilter(const QString &text) const;
+    QVariantMap suspicious() const { return m_suspicious; }
+    QVariantMap inbound() const { return m_inbound; }
     // Client names seen among answering addresses, most common first, and
     // the versions seen for one of them.
     QStringList clientNames() const;
@@ -298,6 +303,8 @@ private:
     CatalogListModel *m_nodeList;
     dht::NodeQuery m_nodeQuery;
     QVariantMap m_nodeListInfo;
+    QVariantMap m_suspicious;
+    QVariantMap m_inbound;
     quint64 m_nodeRequestId = 0;
     bool m_nodeQueryInFlight = false;
     bool m_nodeQueryAgain = false;

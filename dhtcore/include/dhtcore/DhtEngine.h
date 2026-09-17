@@ -2,6 +2,7 @@
 
 #include "dhtcore/Census.h"
 #include "dhtcore/Crawler.h"
+#include "dhtcore/Inbound.h"
 #include "dhtcore/DhtNode.h"
 #include "dhtcore/NodeCatalog.h"
 #include "dhtcore/NodeList.h"
@@ -152,6 +153,7 @@ private:
     ItemStorage m_items;
     SendBudget m_budget;
     NodeCatalog m_catalog;
+    InboundTally m_inbound;
     Crawler *m_crawler = nullptr;
     Census *m_census = nullptr;
     ClientLabelCache m_labels;

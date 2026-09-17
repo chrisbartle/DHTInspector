@@ -35,6 +35,10 @@ public:
         FirstSeenRole,     // "3 min ago"
         LastAnsweredRole,  // "12 s ago", "never"
         LastQueriedRole,
+        FeaturesRole,      // e.g. "51 44 32 ip 204"; empty until checked
+        FeatureDetailRole, // the same, spelled out
+        SuspicionRole,     // signal names for its address
+        ProblemRole,       // why an unreachable address is
     };
 
     explicit CatalogListModel(QObject *parent = nullptr);

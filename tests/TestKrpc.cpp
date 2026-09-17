@@ -261,6 +261,35 @@ void TestKrpc::usableRemote()
     QVERIFY(isUsableRemote(ep("10.0.0.1", 6881), true));
     QVERIFY(!isUsableRemote(ep("127.0.0.1", 6881), false));
     QVERIFY(isUsableRemote(ep("127.0.0.1", 6881), true));
+
+    // Why the others are unusable.
+    using P = AddressProblem;
+    QCOMPARE(addressProblem(ep("8.8.8.8", 6881), false), P::None);
+    QCOMPARE(addressProblem(ep("8.8.8.8", 0), false), P::ZeroPort);
+    QCOMPARE(addressProblem(ep("0.0.0.0", 6881), false), P::Unspecified);
+    QCOMPARE(addressProblem(ep("0.1.2.3", 6881), false), P::Unspecified);
+    QCOMPARE(addressProblem(ep("::", 6881), false), P::Unspecified);
+    QCOMPARE(addressProblem(ep("192.168.1.2", 6881), false), P::Local);
+    QCOMPARE(addressProblem(ep("192.168.1.2", 0), false), P::Local);  // the address is the bigger problem
+    QCOMPARE(addressProblem(ep("fe80::1", 6881), false), P::Local);
+    QCOMPARE(addressProblem(ep("fd00::1", 6881), false), P::Local);
+    QCOMPARE(addressProblem(ep("::1", 6881), false), P::Local);
+    QCOMPARE(addressProblem(ep("::ffff:10.1.2.3", 6881), false), P::Local);
+    QCOMPARE(addressProblem(ep("224.0.0.1", 6881), false), P::Multicast);
+    QCOMPARE(addressProblem(ep("255.255.255.255", 6881), false), P::Multicast);
+    QCOMPARE(addressProblem(ep("ff02::1", 6881), false), P::Multicast);
+    for (const char *reserved : {"100.64.0.1", "100.127.255.254", "192.0.0.8", "192.0.2.1", "198.18.0.1",
+                                 "198.19.255.1", "198.51.100.1", "203.0.113.1", "240.0.0.1", "2001:db8::1",
+                                 "100::1", "4000::1"}) {
+        QVERIFY2(addressProblem(ep(reserved, 6881), false) == P::Reserved, reserved);
+        QVERIFY2(addressProblem(ep(reserved, 6881), true) == P::Reserved, reserved);
+    }
+    for (const char *fine : {"100.63.255.255", "100.128.0.1", "198.20.0.1", "2001:470::1", "2a00:1450::1",
+                             "3fff:ffff::1"}) {
+        QVERIFY2(addressProblem(ep(fine, 6881), false) == P::None, fine);
+    }
+    QCOMPARE(addressProblem(ep("10.0.0.1", 0), true), P::ZeroPort);
+    QCOMPARE(addressProblemName(P::ZeroPort), QStringLiteral("Port 0"));
 }
 
 void TestKrpc::escapesBytes()

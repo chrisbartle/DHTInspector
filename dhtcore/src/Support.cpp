@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <limits>
+#include <random>
 
 namespace dht {
 
@@ -351,6 +352,18 @@ bool RateLimiter::allow(const QHostAddress &address, qint64 now)
         return false;
     b.tokens -= 1.0;
     return true;
+}
+
+std::vector<NodeId> PeerStorage::sampleInfohashes(int max) const
+{
+    std::vector<NodeId> all;
+    all.reserve(m_entries.size());
+    for (auto it = m_entries.cbegin(); it != m_entries.cend(); ++it)
+        all.push_back(it.key());
+    std::shuffle(all.begin(), all.end(), std::mt19937(QRandomGenerator::global()->generate()));
+    if (int(all.size()) > max)
+        all.resize(size_t(std::max(0, max)));
+    return all;
 }
 
 void SendBudget::setLimit(qint64 bytesPerSecond, qint64 now)

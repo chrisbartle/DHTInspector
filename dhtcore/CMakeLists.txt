@@ -10,6 +10,7 @@ qt_add_library(dhtcore STATIC
     include/dhtcore/DhtNode.h       src/DhtNode.cpp
     include/dhtcore/Endpoint.h      src/Endpoint.cpp
     include/dhtcore/Gateway.h       src/Gateway.cpp
+    include/dhtcore/Inbound.h       src/Inbound.cpp
     include/dhtcore/Krpc.h          src/Krpc.cpp
     include/dhtcore/Lookup.h        src/Lookup.cpp
     include/dhtcore/NetworkStats.h  src/NetworkStats.cpp
@@ -21,6 +22,7 @@ qt_add_library(dhtcore STATIC
     include/dhtcore/RpcManager.h    src/RpcManager.cpp
     include/dhtcore/Snapshot.h
     include/dhtcore/Support.h       src/Support.cpp
+    include/dhtcore/Sybil.h         src/Sybil.cpp
 )
 
 target_include_directories(dhtcore PUBLIC include)

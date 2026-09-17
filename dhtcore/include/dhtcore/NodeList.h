@@ -5,6 +5,7 @@
 #include "dhtcore/Endpoint.h"
 #include "dhtcore/NodeCatalog.h"
 #include "dhtcore/NodeId.h"
+#include "dhtcore/Sybil.h"
 
 #include <QHash>
 #include <QHostAddress>
@@ -39,6 +40,14 @@ struct NodeQuery
     int subnetBits = -1;
     quint16 port = 0;          // 0: any
     int minNodesAtAddress = 0; // nodes the catalogue holds at the same address
+    // Node IDs starting with these bits (bits < 0: any).
+    NodeId idPrefix;
+    int idPrefixBits = -1;
+    // CatalogEntry::Flag bits that must all be set, and that must all be clear.
+    quint32 flagsSet = 0;
+    quint32 flagsClear = 0;
+    // Suspicious-group filter: SybilSignal bits or SeveralSignals, 0 for any.
+    quint8 suspicion = 0;
 
     Sort sort = Sort::Address;
     bool descending = false;
@@ -65,6 +74,11 @@ struct NodeListRow
     qint64 firstSeenAgoMs = -1;
     qint64 lastAnsweredAgoMs = -1;  // -1: never
     qint64 lastQueriedAgoMs = -1;
+    quint32 flags = 0;              // CatalogEntry::Flag bits
+    int selfListSharePercent = -1;  // -1: not known
+    quint32 bep51Samples = 0;       // "num" from sample_infohashes
+    quint8 suspicion = 0;           // SybilSignal bits for its address
+    AddressProblem problem = AddressProblem::None;  // why it is unreachable
 };
 
 struct NodeListPage
@@ -83,6 +97,7 @@ struct NodeExport
 {
     std::vector<CatalogEntry> entries;
     std::vector<int> nodesAtAddress;  // parallel to entries
+    std::vector<quint8> suspicion;    // parallel to entries
     quint32 nowStamp = 0;
     int tickMs = NodeCatalog::TickMs;
     NodeQuery query;
@@ -106,6 +121,10 @@ private:
     QHash<quint64, Labels> m_labels;
 };
 
+// Parses a node ID prefix given in hex, optionally with a bit count:
+// "a1b2", "a1b2/13". Without a count, the prefix is 4 bits per digit.
+bool parseIdPrefixFilter(const QString &text, NodeId *prefix, int *bits, QString *error = nullptr);
+
 // Whether `address` lies within `subnet`/`bits` (bits < 0: any).
 bool addressInSubnet(const std::array<quint8, 16> &address, const QHostAddress &subnet, int bits);
 
@@ -113,8 +132,19 @@ bool addressInSubnet(const std::array<quint8, 16> &address, const QHostAddress &
 // means any address. Returns false, with a reason, when it cannot be read.
 bool parseAddressFilter(const QString &text, QHostAddress *address, int *bits, QString *error = nullptr);
 
-NodeListPage queryNodes(const NodeCatalog &catalog, const NodeQuery &query, qint64 nowMs, ClientLabelCache &labels);
-NodeExport collectNodes(const NodeCatalog &catalog, const NodeQuery &query, qint64 nowMs, ClientLabelCache &labels);
+// `suspicion` is the latest suspicious-address map; without it, signal
+// filters match only on what a node records itself.
+NodeListPage queryNodes(const NodeCatalog &catalog, const NodeQuery &query, qint64 nowMs, ClientLabelCache &labels,
+                        const AddressSignals *suspicion = nullptr);
+NodeExport collectNodes(const NodeCatalog &catalog, const NodeQuery &query, qint64 nowMs, ClientLabelCache &labels,
+                        const AddressSignals *suspicion = nullptr);
+
+// Short text for a feature check: "yes", "no", or empty when not checked.
+QString featureAnswer(quint32 flags, CatalogEntry::Flag tested, CatalogEntry::Flag has);
+// The unknown-query check: "204", "other error", "reply", "no answer", or empty.
+QString unknownQueryAnswer(quint32 flags);
+// Signal bits as text, e.g. "many nodes, dense subnet".
+QString signalNames(quint8 suspicion);
 
 // One row per node, with a header. Returns false, with a reason, on failure.
 bool writeNodesCsv(const NodeExport &nodes, const QString &path, QString *error);

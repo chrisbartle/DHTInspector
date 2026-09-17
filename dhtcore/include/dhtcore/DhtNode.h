@@ -18,6 +18,8 @@ class QUdpSocket;
 
 namespace dht {
 
+class InboundTally;
+
 struct NodeConfig
 {
     Family family = Family::IPv4;
@@ -59,6 +61,13 @@ public:
     // queries are treated and whether outgoing ones carry "ro".
     bool isReadOnly() const { return m_config.readOnly; }
     void setReadOnly(bool readOnly);
+
+    // Where incoming queries are tallied (shared across families); may be null.
+    void setInbound(InboundTally *inbound) { m_inbound = inbound; }
+
+    // BEP 51: how often a sample may be asked for again, in seconds.
+    static constexpr int SampleIntervalSeconds = 6 * 60 * 60;
+    static constexpr int MaxSamples = 20;
 
     // The node for the other family, used to answer BEP 32 "want" requests.
     void setSibling(DhtNode *sibling) { m_sibling = sibling; }
@@ -151,6 +160,7 @@ private:
     PeerStorage *m_storage;
     ItemStorage *m_items;
     SendBudget *m_budget;
+    InboundTally *m_inbound = nullptr;
     QUdpSocket *m_socket = nullptr;
     RpcManager *m_rpc = nullptr;
     NodeId m_id;

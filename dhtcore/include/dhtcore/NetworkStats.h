@@ -1,7 +1,11 @@
 #pragma once
 
+#include "dhtcore/ClientVersion.h"
+#include "dhtcore/Endpoint.h"
+#include "dhtcore/Inbound.h"
 #include "dhtcore/NodeCatalog.h"
 #include "dhtcore/NodeId.h"
+#include "dhtcore/Sybil.h"
 
 #include <QString>
 
@@ -12,20 +16,17 @@
 
 namespace dht {
 
-// How many answering addresses report one client (and, in the detailed
-// list, one version of it). Fractional: an address running several nodes
-// is split evenly between what they report.
-struct ClientTally
-{
-    QString name;     // "libtorrent (Rasterbar)", "no version sent", "unknown client ZZ", ...
-    QString version;  // "2.0.11"; "bytes ab cd" when the layout is unpublished; empty in the by-name list
-    QString kind;     // known, unknown, nonstandard, absent
-    double count = 0;
-};
-
 // Statistics for one address family, or both, counted by IP address: node
 // IDs can be changed at will and one host can run many nodes, while an
 // address is comparatively stable. Everything is as seen from this machine.
+// A yes/no property over answering addresses: how many were checked, and
+// how many of those had it.
+struct FeatureTally
+{
+    double tested = 0;
+    double yes = 0;
+};
+
 struct NetworkStats
 {
     static constexpr int MaxRttMs = 3000;
@@ -54,6 +55,21 @@ struct NetworkStats
     int distinctPorts = 0;
     double defaultPortCount = 0;                        // on 6881
 
+    // Optional features, over answering addresses.
+    FeatureTally bep51;         // sample_infohashes
+    FeatureTally bep44;         // get
+    FeatureTally bep32;         // lists the other family when asked
+    FeatureTally sendsIp;       // replies carry "ip"
+    FeatureTally answers204;    // tested: asked an unknown query; yes: error 204
+    double unknownOther = 0;    // answered the unknown query some other way
+    double unknownOtherError = 0;  // of which with another error code
+    FeatureTally listsBogons;   // tested: has listed nodes; yes: some unreachable
+    double bep51SamplesMedian = -1;  // stored infohashes, over BEP 51 addresses
+
+    // Listed addresses that cannot be contacted, by reason. Port 0 counts
+    // addresses listed with that port, even if listed with others too.
+    std::array<int, AddressProblemCount> unroutableByProblem{};
+
     // Nodes per answering address, to turn node counts into address counts.
     double nodesPerIp() const { return answeringIps > 0 ? double(answeringNodes) / answeringIps : 1.0; }
 };
@@ -63,6 +79,8 @@ struct NetworkStatsSet
     NetworkStats ipv4;
     NetworkStats ipv6;
     NetworkStats all;
+    SybilReport suspicious;  // both families
+    InboundSummary inbound;  // queries sent to us
     qint64 computedAtMs = 0;
     int computeMs = 0;  // how long the pass took
 };

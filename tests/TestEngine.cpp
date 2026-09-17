@@ -1181,6 +1181,59 @@ void TestEngine::monitoringDiscoversTheWholeSwarm()
     QVERIFY(stats->all.rttMedianMs >= 0);
     QCOMPARE(stats->all.distinctPorts, N);
 
+    // Every answering node gets its feature checks. Ours support BEP 51 and
+    // BEP 44, answer an unknown query with 204 and send "ip"; being IPv4
+    // only here, they list no IPv6 nodes.
+    const auto checked = [&] {
+        int done = 0;
+        monitor->catalog().forEach([&](NodeCatalog::Slot, const CatalogEntry &e) {
+            done += e.state == CatalogEntry::State::Responsive && e.featuresDone() ? 1 : 0;
+        });
+        return done;
+    };
+    QTRY_COMPARE_WITH_TIMEOUT(checked(), N, 20000);
+    monitor->catalog().forEach([&](NodeCatalog::Slot, const CatalogEntry &e) {
+        if (e.state != CatalogEntry::State::Responsive)
+            return;
+        using F = CatalogEntry;
+        QVERIFY(e.has(F::Has51));
+        QVERIFY(e.has(F::Has44));
+        QVERIFY(e.has(F::Tested32) && !e.has(F::Has32));
+        QVERIFY(e.has(F::TestedIp) && e.has(F::SendsIp));
+        QVERIFY(e.has(F::Answers204) && !e.has(F::AnswersOther));
+        QVERIFY(!e.has(F::FeatureQueued));
+        QVERIFY(e.selfListShare != F::NoShare);
+        QVERIFY(!e.has(F::ListsBogons));
+    });
+    QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.stats->all.answers204.tested == double(N), 10000);
+    const auto features = monitor->snapshot().crawl.stats;
+    QCOMPARE(features->all.bep51.yes, double(N));
+    QCOMPARE(features->all.bep44.yes, double(N));
+    QCOMPARE(features->all.bep32.tested, double(N));
+    QCOMPARE(features->all.bep32.yes, 0.0);
+    QCOMPARE(features->all.sendsIp.yes, double(N));
+    QCOMPARE(features->all.answers204.yes, double(N));
+    QCOMPARE(features->all.bep51SamplesMedian, 0.0);
+    QCOMPARE(monitor->snapshot().crawl.featureWaiting, 0);
+    QVERIFY(monitor->snapshot().crawl.featureQueries >= 3 * N);
+    // All on 127.0.0.x: one dense subnet, and every node lists only it.
+    QCOMPARE(features->suspicious.denseSubnetCount, 1);
+    QCOMPARE(features->suspicious.selfPointerCount, N);
+    QVERIFY(features->suspicious.flaggedCount >= N - 1);
+
+    // A read-only node querying us shows up among the queries to us.
+    QUdpSocket ro;
+    QVERIFY(ro.bind(QHostAddress(QStringLiteral("127.0.0.99")), 0));
+    BValue::Dict args = withId(NodeId::random());
+    ro.writeDatagram(krpc::encodeQuery("ro", "ping", std::move(args), "XX\x01\x02", true),
+                     QHostAddress(QHostAddress::LocalHost), portOf(*monitor));
+    QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.stats->inbound.readOnlyAddresses == 1, 10000);
+    const InboundSummary inbound = monitor->snapshot().crawl.stats->inbound;
+    QVERIFY(inbound.queries >= 1);
+    QVERIFY(inbound.addresses >= 1);
+    QVERIFY(std::any_of(inbound.methods.begin(), inbound.methods.end(),
+                        [](const auto &m) { return m.first == QLatin1String("ping"); }));
+
     // And lookups for random IDs start producing size estimates.
     QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.sizeV4.samples > 0, 15000);
     QVERIFY(monitor->snapshot().crawl.sizeV4.median > 0);

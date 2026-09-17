@@ -83,6 +83,11 @@ private slots:
     void pages();
     void fillsRows();
     void exportsCsv();
+    void parsesIdPrefixFilters();
+    void filtersByIdPrefix();
+    void filtersByFeatures();
+    void filtersBySuspicion();
+    void describesFeaturesAndProblems();
 
 private:
     NodeCatalog m_catalog{1000};
@@ -376,6 +381,199 @@ void TestNodeList::exportsCsv()
     // A bad path fails with a reason.
     QVERIFY(!writeNodesCsv(nodes, dir.filePath(QStringLiteral("missing/dir/nodes.csv")), &error));
     QVERIFY(!error.isEmpty());
+}
+
+void TestNodeList::parsesIdPrefixFilters()
+{
+    NodeId prefix;
+    int bits = 0;
+    QString error;
+    QVERIFY(parseIdPrefixFilter(QString(), &prefix, &bits));
+    QCOMPARE(bits, -1);
+    QVERIFY(parseIdPrefixFilter(QStringLiteral(" A1b2 "), &prefix, &bits));
+    QCOMPARE(bits, 16);
+    QCOMPARE(prefix[0], quint8(0xa1));
+    QCOMPARE(prefix[1], quint8(0xb2));
+    QCOMPARE(prefix[2], quint8(0));
+    QVERIFY(parseIdPrefixFilter(QStringLiteral("abc"), &prefix, &bits));
+    QCOMPARE(bits, 12);
+    QCOMPARE(prefix[1], quint8(0xc0));
+    QVERIFY(parseIdPrefixFilter(QStringLiteral("a1b2/13"), &prefix, &bits));
+    QCOMPARE(bits, 13);
+    const QString full = NodeId::random().toHex();
+    QVERIFY(parseIdPrefixFilter(full, &prefix, &bits));
+    QCOMPARE(bits, 160);
+    QCOMPARE(prefix.toHex(), full);
+
+    for (const char *bad : {"xyz", "a1b2/17", "a1/0", "a1/x", "/8", "00000000000000000000000000000000000000000"}) {
+        error.clear();
+        QVERIFY2(!parseIdPrefixFilter(QString::fromLatin1(bad), &prefix, &bits, &error), bad);
+        QVERIFY(!error.isEmpty());
+    }
+}
+
+void TestNodeList::filtersByIdPrefix()
+{
+    const auto setId = [&](const char *address, quint16 port, quint8 a, quint8 b) {
+        CatalogEntry &e = m_catalog.at(m_catalog.find(Endpoint(QHostAddress(QString::fromLatin1(address)), port)));
+        e.id[0] = a;
+        e.id[1] = b;
+    };
+    m_catalog.forEach([&](NodeCatalog::Slot slot, const CatalogEntry &) { m_catalog.at(slot).id[0] = 0x00; });
+    setId("203.0.113.1", 6881, 0xab, 0xcd);
+    setId("203.0.113.2", 6881, 0xab, 0xc0);
+    setId("2001:db8::1", 6881, 0xab, 0x00);
+
+    NodeQuery q;
+    QVERIFY(parseIdPrefixFilter(QStringLiteral("abcd"), &q.idPrefix, &q.idPrefixBits));
+    QCOMPARE(addresses(run(q)), QStringList{QStringLiteral("203.0.113.1:6881")});
+    QVERIFY(parseIdPrefixFilter(QStringLiteral("abc"), &q.idPrefix, &q.idPrefixBits));
+    QCOMPARE(run(q).matchedNodes, 2);
+    QVERIFY(parseIdPrefixFilter(QStringLiteral("ab"), &q.idPrefix, &q.idPrefixBits));
+    QCOMPARE(run(q).matchedNodes, 3);
+    QVERIFY(parseIdPrefixFilter(QStringLiteral("a0/4"), &q.idPrefix, &q.idPrefixBits));
+    QCOMPARE(run(q).matchedNodes, 3);
+    QVERIFY(parseIdPrefixFilter(QStringLiteral("ff"), &q.idPrefix, &q.idPrefixBits));
+    QCOMPARE(run(q).matchedNodes, 0);
+}
+
+void TestNodeList::filtersByFeatures()
+{
+    using F = CatalogEntry;
+    const auto entry = [&](const char *address, quint16 port) -> CatalogEntry & {
+        return m_catalog.at(m_catalog.find(Endpoint(QHostAddress(QString::fromLatin1(address)), port)));
+    };
+    entry("203.0.113.1", 6881).flags = F::Tested51 | F::Has51 | F::TestedUnknown | F::Answers204;
+    entry("203.0.113.2", 6881).flags = F::Tested51 | F::TestedUnknown;
+    entry("198.51.100.9", 7000).flags = F::Tested51 | F::TestedUnknown | F::AnswersOther | F::ListsBogons;
+
+    NodeQuery q;
+    q.flagsSet = F::Tested51 | F::Has51;
+    QCOMPARE(addresses(run(q)), QStringList{QStringLiteral("203.0.113.1:6881")});
+    q.flagsSet = F::Tested51;
+    q.flagsClear = F::Has51;
+    QCOMPARE(run(q).matchedNodes, 2);
+    q.flagsSet = F::TestedUnknown;
+    q.flagsClear = F::Answers204 | F::AnswersOther;
+    QCOMPARE(addresses(run(q)), QStringList{QStringLiteral("203.0.113.2:6881")});
+    q.flagsSet = F::ListsBogons;
+    q.flagsClear = 0;
+    QCOMPARE(addresses(run(q)), QStringList{QStringLiteral("198.51.100.9:7000")});
+}
+
+void TestNodeList::filtersBySuspicion()
+{
+    // Three more nodes on 198.51.100.9 make five answering there.
+    fill(m_catalog, {
+        {"198.51.100.9", 7003, State::Responsive, "", 10, bep42::Status::NonCompliant},
+        {"198.51.100.9", 7004, State::Responsive, "", 10, bep42::Status::NonCompliant},
+        {"198.51.100.9", 7005, State::Responsive, "", 10, bep42::Status::NonCompliant},
+    }, m_now);
+    m_catalog.at(m_catalog.find(Endpoint(QHostAddress(QStringLiteral("203.0.113.2")), 6881))).selfListShare = 75;
+    const SybilReport report = computeSybilReport(m_catalog);
+    QCOMPARE(report.manyNodesCount, 1);
+
+    NodeQuery q;
+    q.suspicion = ManyNodes;
+    NodeListPage page = queryNodes(m_catalog, q, m_now, m_labels, report.addressSignals.get());
+    QCOMPARE(page.matchedNodes, 6);  // every node there, answering or not
+    QCOMPARE(page.matchedAddresses, 1);
+    for (const NodeListRow &row : page.rows)
+        QCOMPARE(row.suspicion, quint8(ManyNodes));
+
+    q.suspicion = PointsToSelf;
+    page = queryNodes(m_catalog, q, m_now, m_labels, report.addressSignals.get());
+    QCOMPARE(addresses(page), QStringList{QStringLiteral("203.0.113.2:6881")});
+    QCOMPARE(page.rows[0].selfListSharePercent, 75);
+
+    q.suspicion = SeveralSignals;
+    QCOMPARE(queryNodes(m_catalog, q, m_now, m_labels, report.addressSignals.get()).matchedNodes, 0);
+
+    // Without the map, only what a node records itself can match.
+    q.suspicion = ManyNodes;
+    QCOMPARE(run(q).matchedNodes, 0);
+
+    // Exports carry the signals too.
+    const NodeExport nodes = collectNodes(m_catalog, q, m_now, m_labels, report.addressSignals.get());
+    QCOMPARE(int(nodes.suspicion.size()), 6);
+    QCOMPARE(nodes.suspicion[0], quint8(ManyNodes));
+}
+
+void TestNodeList::describesFeaturesAndProblems()
+{
+    using F = CatalogEntry;
+    QCOMPARE(featureAnswer(0, F::Tested51, F::Has51), QString());
+    QCOMPARE(featureAnswer(F::Tested51, F::Tested51, F::Has51), QStringLiteral("no"));
+    QCOMPARE(featureAnswer(F::Tested51 | F::Has51, F::Tested51, F::Has51), QStringLiteral("yes"));
+    QCOMPARE(unknownQueryAnswer(0), QString());
+    QCOMPARE(unknownQueryAnswer(F::TestedUnknown), QStringLiteral("no answer"));
+    QCOMPARE(unknownQueryAnswer(F::TestedUnknown | F::Answers204), QStringLiteral("204"));
+    QCOMPARE(unknownQueryAnswer(F::TestedUnknown | F::AnswersOther), QStringLiteral("reply"));
+    QCOMPARE(unknownQueryAnswer(F::TestedUnknown | F::AnswersOther | F::AnswersError), QStringLiteral("other error"));
+    QCOMPARE(signalNames(ManyNodes | PointsToSelf), QStringLiteral("many nodes, points to self"));
+    QCOMPARE(signalNames(0), QString());
+
+    // The packed fields leave each other alone.
+    CatalogEntry packed;
+    packed.flags = F::AnswersError | F::FeatureQueued | F::Tested51;
+    packed.setFeatureTries(3);
+    packed.setSampleCount(1000000);
+    QCOMPARE(packed.sampleCount(), F::MaxSampleCount);
+    QCOMPARE(packed.featureTries(), 3);
+    QVERIFY(packed.has(F::AnswersError) && packed.has(F::FeatureQueued) && packed.has(F::Tested51));
+    packed.setSampleCount(-5);
+    packed.setFeatureTries(0);
+    QCOMPARE(packed.sampleCount(), quint32(0));
+    QCOMPARE(packed.flags, quint32(F::AnswersError | F::FeatureQueued | F::Tested51));
+
+    // Unreachable entries keep their reason where the failure count would be.
+    m_catalog.at(m_catalog.find(Endpoint(QHostAddress(QStringLiteral("10.0.0.1")), 6881))).failures =
+        quint8(AddressProblem::Local);
+    CatalogEntry &e = m_catalog.at(m_catalog.find(Endpoint(QHostAddress(QStringLiteral("203.0.113.1")), 6881)));
+    e.flags = F::Tested51 | F::Has51 | F::TestedIp | F::SendsIp | F::Tested44 | F::TestedUnknown | F::Answers204
+              | F::ListsBogons;
+    e.selfListShare = 12;
+    e.setSampleCount(4242);
+
+    NodeQuery q;
+    const NodeListPage page = run(q);
+    const auto row = [&](const QString &endpoint) {
+        return *std::find_if(page.rows.begin(), page.rows.end(),
+                             [&](const NodeListRow &r) { return r.endpoint.toString() == endpoint; });
+    };
+    const NodeListRow unreachable = row(QStringLiteral("10.0.0.1:6881"));
+    QCOMPARE(unreachable.problem, AddressProblem::Local);
+    QCOMPARE(unreachable.failures, 0);
+    const NodeListRow checked = row(QStringLiteral("203.0.113.1:6881"));
+    QCOMPARE(checked.problem, AddressProblem::None);
+    QCOMPARE(checked.bep51Samples, quint32(4242));
+    QCOMPARE(checked.selfListSharePercent, 12);
+
+    // And the CSV spells it all out.
+    const NodeExport nodes = collectNodes(m_catalog, q, m_now, m_labels);
+    QTemporaryDir dir;
+    const QString path = dir.filePath(QStringLiteral("nodes.csv"));
+    QVERIFY(writeNodesCsv(nodes, path, nullptr));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QList<QByteArray> lines = file.readAll().split(char(10));
+    QCOMPARE(lines[0].split(',').size(), 28);
+    QVERIFY(lines[0].endsWith(",bep51,bep51_samples,bep44,bep32,sends_ip,unknown_query,lists_bad_addresses,"
+                              "self_list_share,suspicious,address_problem"));
+    int seen = 0;
+    for (const QByteArray &line : lines) {
+        if (line.startsWith("203.0.113.1,")) {
+            QVERIFY2(line.endsWith(",yes,4242,no,,yes,204,yes,12,,"), line.constData());
+            ++seen;
+        }
+        if (line.startsWith("10.0.0.1,")) {
+            QVERIFY2(line.endsWith(",,,,,,,,,,Private or local"), line.constData());
+            ++seen;
+        }
+        if (!line.isEmpty())
+            QCOMPARE(line.count(','), 27);
+    }
+    QCOMPARE(seen, 2);
 }
 
 int runTestNodeList(int argc, char **argv)

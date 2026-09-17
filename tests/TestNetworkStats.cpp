@@ -86,6 +86,8 @@ private slots:
     void summarisesEstimates();
     void emptyCatalogue();
     void countsAddressesNotNodes();
+    void talliesFeaturesPerAddress();
+    void classifiesUnreachableAddresses();
 };
 
 void TestNetworkStats::countsOnlyResponsiveNodesPerFamily()
@@ -358,6 +360,95 @@ void TestNetworkStats::countsAddressesNotNodes()
     QCOMPARE(s.rttMeanMs, (0.25 * (100 + 200 + 300 + 400) + 50) / 2.0);
     QCOMPARE(s.distinctPorts, 4);
     QCOMPARE(s.defaultPortCount, 1.25);
+}
+
+// Feature checks count per answering address, over the addresses checked.
+void TestNetworkStats::talliesFeaturesPerAddress()
+{
+    using F = CatalogEntry;
+    NodeCatalog catalog(100);
+    fill(catalog, {
+        {"203.0.113.1", 6881, State::Responsive, "", 10, bep42::Status::Unknown},
+        {"203.0.113.2", 6881, State::Responsive, "", 10, bep42::Status::Unknown},
+        {"203.0.113.2", 6882, State::Responsive, "", 10, bep42::Status::Unknown},
+        {"203.0.113.3", 6881, State::Responsive, "", 10, bep42::Status::Unknown},
+        {"203.0.113.4", 6881, State::Gone, "", 10, bep42::Status::Unknown},
+    });
+    const auto entry = [&](const char *address, quint16 port) -> CatalogEntry & {
+        return catalog.at(catalog.find(Endpoint(QHostAddress(QString::fromLatin1(address)), port)));
+    };
+    CatalogEntry &a = entry("203.0.113.1", 6881);
+    a.flags = F::Tested51 | F::Has51 | F::Tested44 | F::Has44 | F::Tested32 | F::TestedIp | F::SendsIp
+              | F::TestedUnknown | F::Answers204;
+    a.setSampleCount(100);
+    a.selfListShare = 0;
+    // An address with two nodes: each counts half.
+    CatalogEntry &b1 = entry("203.0.113.2", 6881);
+    b1.flags = F::Tested51 | F::Has51 | F::TestedUnknown | F::AnswersOther | F::AnswersError | F::ListsBogons;
+    b1.setSampleCount(300);
+    b1.selfListShare = 10;
+    entry("203.0.113.2", 6882).flags = F::Tested51 | F::TestedUnknown;
+    // .3 is not checked yet; the gone node does not count at all.
+    entry("203.0.113.4", 6881).flags = F::Tested51 | F::Has51;
+
+    const NetworkStats s = computeNetworkStats(catalog, nowMs()).all;
+    QCOMPARE(s.bep51.tested, 2.0);
+    QCOMPARE(s.bep51.yes, 1.5);
+    QCOMPARE(s.bep44.tested, 1.0);
+    QCOMPARE(s.bep44.yes, 1.0);
+    QCOMPARE(s.bep32.tested, 1.0);
+    QCOMPARE(s.bep32.yes, 0.0);
+    QCOMPARE(s.sendsIp.yes, 1.0);
+    QCOMPARE(s.answers204.tested, 2.0);
+    QCOMPARE(s.answers204.yes, 1.0);
+    QCOMPARE(s.unknownOther, 0.5);
+    QCOMPARE(s.unknownOtherError, 0.5);
+    QCOMPARE(s.listsBogons.tested, 1.5);
+    QCOMPARE(s.listsBogons.yes, 0.5);
+    // Weighted median of 100 (weight 1) and 300 (weight 0.5).
+    QCOMPARE(s.bep51SamplesMedian, 100.0);
+
+    const NetworkStats none = computeNetworkStats(NodeCatalog(10), nowMs()).all;
+    QCOMPARE(none.bep51.tested, 0.0);
+    QCOMPARE(none.bep51SamplesMedian, -1.0);
+}
+
+void TestNetworkStats::classifiesUnreachableAddresses()
+{
+    NodeCatalog catalog(100);
+    fill(catalog, {
+        {"10.0.0.1", 6881, State::Unroutable, "", -1, bep42::Status::Unknown},
+        {"10.0.0.1", 6882, State::Unroutable, "", -1, bep42::Status::Unknown},
+        {"192.0.2.1", 6881, State::Unroutable, "", -1, bep42::Status::Unknown},
+        {"224.0.0.1", 6881, State::Unroutable, "", -1, bep42::Status::Unknown},
+        {"203.0.113.9", 0, State::Unroutable, "", -1, bep42::Status::Unknown},
+        {"203.0.113.9", 6881, State::Responsive, "", 5, bep42::Status::Unknown},
+        {"203.0.113.10", 0, State::Unroutable, "", -1, bep42::Status::Unknown},
+        {"2001:db8::1", 6881, State::Unroutable, "", -1, bep42::Status::Unknown},
+    });
+    const auto reason = [&](const char *address, quint16 port, AddressProblem problem) {
+        catalog.at(catalog.find(Endpoint(QHostAddress(QString::fromLatin1(address)), port))).failures = quint8(problem);
+    };
+    reason("10.0.0.1", 6881, AddressProblem::Local);
+    reason("10.0.0.1", 6882, AddressProblem::Local);
+    reason("192.0.2.1", 6881, AddressProblem::Reserved);
+    reason("224.0.0.1", 6881, AddressProblem::Multicast);
+    reason("203.0.113.9", 0, AddressProblem::ZeroPort);
+    reason("203.0.113.10", 0, AddressProblem::ZeroPort);
+    reason("2001:db8::1", 6881, AddressProblem::Reserved);
+
+    const NetworkStatsSet set = computeNetworkStats(catalog, nowMs());
+    const auto count = [](const NetworkStats &s, AddressProblem p) { return s.unroutableByProblem[size_t(p)]; };
+    // .9 has a good port too, so it is reachable, but was still listed with port 0.
+    QCOMPARE(set.ipv4.unroutableIps, 4);
+    QCOMPARE(set.ipv4.heardIps, 1);
+    QCOMPARE(count(set.ipv4, AddressProblem::Local), 1);
+    QCOMPARE(count(set.ipv4, AddressProblem::Reserved), 1);
+    QCOMPARE(count(set.ipv4, AddressProblem::Multicast), 1);
+    QCOMPARE(count(set.ipv4, AddressProblem::ZeroPort), 2);
+    QCOMPARE(count(set.ipv6, AddressProblem::Reserved), 1);
+    QCOMPARE(count(set.all, AddressProblem::Reserved), 2);
+    QCOMPARE(count(set.all, AddressProblem::None), 0);
 }
 
 int runTestNetworkStats(int argc, char **argv)

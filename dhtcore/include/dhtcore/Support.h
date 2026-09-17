@@ -66,6 +66,8 @@ public:
     void clear();
 
     int infohashCount() const { return int(m_entries.size()); }
+    // Up to `max` stored infohashes, chosen at random (BEP 51).
+    std::vector<NodeId> sampleInfohashes(int max) const;
     int peerCount() const { return m_peerCount; }
     std::vector<StoredInfohash> snapshot() const;
 

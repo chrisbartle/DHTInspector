@@ -85,8 +85,13 @@ AddressCounts countAddresses(const NodeCatalog &catalog)
     return counts;
 }
 
+bool idHasPrefix(const NodeId &id, const NodeId &prefix, int bits)
+{
+    return bits <= 0 || NodeId::commonPrefixLength(id, prefix) >= std::min(bits, NodeId::Bits);
+}
+
 std::vector<NodeCatalog::Slot> filterNodes(const NodeCatalog &catalog, const NodeQuery &q, ClientLabelCache &labels,
-                                           const AddressCounts *counts)
+                                           const AddressCounts *counts, const AddressSignals *suspicion)
 {
     const SubnetMatcher subnet(q.subnet, q.subnetBits);
     const bool rttFilter = q.minRttMs >= 0 || q.maxRttMs >= 0;
@@ -101,6 +106,12 @@ std::vector<NodeCatalog::Slot> filterNodes(const NodeCatalog &catalog, const Nod
         if (q.port != 0 && e.port != q.port)
             return;
         if (!subnet.matches(e.address))
+            return;
+        if (q.idPrefixBits > 0 && !idHasPrefix(e.id, q.idPrefix, q.idPrefixBits))
+            return;
+        if ((e.flags & q.flagsSet) != q.flagsSet || (e.flags & q.flagsClear) != 0)
+            return;
+        if (q.suspicion != 0 && !matchesSignals(e, q.suspicion, suspicion))
             return;
         if (q.bep42 && (e.lastAnswered == 0 || bep42::Status(e.bep42) != *q.bep42))
             return;
@@ -206,7 +217,8 @@ struct SlotOrder
     }
 };
 
-NodeListRow rowFor(const CatalogEntry &e, quint32 nowStamp, int tickMs, int nodesAtAddress, ClientLabelCache &labels)
+NodeListRow rowFor(const CatalogEntry &e, quint32 nowStamp, int tickMs, int nodesAtAddress, quint8 suspicion,
+                   ClientLabelCache &labels)
 {
     NodeListRow row;
     row.endpoint = e.endpoint();
@@ -223,7 +235,15 @@ NodeListRow rowFor(const CatalogEntry &e, quint32 nowStamp, int tickMs, int node
     }
     row.rttMs = e.rttMs == CatalogEntry::NoRtt ? -1 : e.rttMs;
     row.nodesAtAddress = nodesAtAddress;
-    row.failures = e.failures;
+    // Unreachable entries are never asked; their failure count holds the reason.
+    if (e.state == CatalogEntry::State::Unroutable)
+        row.problem = AddressProblem(e.failures);
+    else
+        row.failures = e.failures;
+    row.flags = e.flags;
+    row.selfListSharePercent = e.selfListShare == CatalogEntry::NoShare ? -1 : e.selfListShare;
+    row.bep51Samples = e.sampleCount();
+    row.suspicion = suspicion;
     row.sightings = e.sightings;
     row.firstSeenAgoMs = ageMs(e.firstSeen, nowStamp, tickMs);
     row.lastAnsweredAgoMs = ageMs(e.lastAnswered, nowStamp, tickMs);
@@ -255,6 +275,87 @@ const ClientLabelCache::Labels &ClientLabelCache::labels(quint64 versionKey)
         it = m_labels.insert(versionKey, l);
     }
     return *it;
+}
+
+QString featureAnswer(quint32 flags, CatalogEntry::Flag tested, CatalogEntry::Flag has)
+{
+    if (!(flags & tested))
+        return QString();
+    return (flags & has) ? QStringLiteral("yes") : QStringLiteral("no");
+}
+
+QString unknownQueryAnswer(quint32 flags)
+{
+    if (!(flags & CatalogEntry::TestedUnknown))
+        return QString();
+    if (flags & CatalogEntry::Answers204)
+        return QStringLiteral("204");
+    if (flags & CatalogEntry::AnswersOther)
+        return (flags & CatalogEntry::AnswersError) ? QStringLiteral("other error") : QStringLiteral("reply");
+    return QStringLiteral("no answer");
+}
+
+QString signalNames(quint8 suspicion)
+{
+    QStringList names;
+    if (suspicion & ManyNodes)
+        names << QStringLiteral("many nodes");
+    if (suspicion & DenseSubnet)
+        names << QStringLiteral("dense subnet");
+    if (suspicion & SharedId)
+        names << QStringLiteral("shared ID");
+    if (suspicion & DenseIds)
+        names << QStringLiteral("dense IDs");
+    if (suspicion & PointsToSelf)
+        names << QStringLiteral("points to self");
+    return names.join(QStringLiteral(", "));
+}
+
+bool parseIdPrefixFilter(const QString &text, NodeId *prefix, int *bits, QString *error)
+{
+    QString t = text.trimmed();
+    *prefix = NodeId();
+    if (t.isEmpty()) {
+        *bits = -1;
+        return true;
+    }
+    int count = -1;
+    if (const qsizetype slash = t.indexOf(QLatin1Char('/')); slash >= 0) {
+        bool ok = false;
+        count = t.mid(slash + 1).trimmed().toInt(&ok);
+        if (!ok || count < 1 || count > NodeId::Bits) {
+            if (error)
+                *error = QStringLiteral("the bit count must be 1 to 160");
+            return false;
+        }
+        t = t.left(slash).trimmed();
+    }
+    const int digits = int(t.size());
+    if (digits == 0 || digits > NodeId::Size * 2) {
+        if (error)
+            *error = QStringLiteral("enter up to 40 hex digits, e.g. a1b2 or a1b2/13");
+        return false;
+    }
+    for (QChar c : std::as_const(t)) {
+        const bool hex = (c >= u'0' && c <= u'9') || (c >= u'a' && c <= u'f') || (c >= u'A' && c <= u'F');
+        if (!hex) {
+            if (error)
+                *error = QStringLiteral("not hex, e.g. a1b2 or a1b2/13");
+            return false;
+        }
+    }
+    const QByteArray padded = QByteArray::fromHex((t + QString(NodeId::Size * 2 - digits, QLatin1Char('0'))).toLatin1());
+    for (int i = 0; i < NodeId::Size; ++i)
+        (*prefix)[i] = quint8(padded[i]);
+    if (count < 0)
+        count = digits * 4;
+    if (count > digits * 4) {
+        if (error)
+            *error = QStringLiteral("%1 hex digits give at most %2 bits").arg(digits).arg(digits * 4);
+        return false;
+    }
+    *bits = count;
+    return true;
 }
 
 bool addressInSubnet(const std::array<quint8, 16> &address, const QHostAddress &subnet, int bits)
@@ -304,7 +405,8 @@ QString stateName(CatalogEntry::State state)
     return {};
 }
 
-NodeListPage queryNodes(const NodeCatalog &catalog, const NodeQuery &query, qint64 nowMs, ClientLabelCache &labels)
+NodeListPage queryNodes(const NodeCatalog &catalog, const NodeQuery &query, qint64 nowMs, ClientLabelCache &labels,
+                        const AddressSignals *suspicion)
 {
     QElapsedTimer timer;
     timer.start();
@@ -314,7 +416,8 @@ NodeListPage queryNodes(const NodeCatalog &catalog, const NodeQuery &query, qint
     if (needCounts)
         counts = countAddresses(catalog);
 
-    std::vector<NodeCatalog::Slot> matches = filterNodes(catalog, query, labels, needCounts ? &counts : nullptr);
+    std::vector<NodeCatalog::Slot> matches = filterNodes(catalog, query, labels,
+                                                        needCounts ? &counts : nullptr, suspicion);
 
     NodeListPage page;
     page.matchedNodes = int(matches.size());
@@ -351,16 +454,18 @@ NodeListPage queryNodes(const NodeCatalog &catalog, const NodeQuery &query, qint
     for (int i = offset; i < end; ++i) {
         const CatalogEntry &e = catalog.at(matches[i]);
         const auto it = counts.find(e.address);
-        page.rows.push_back(rowFor(e, now, NodeCatalog::TickMs, it == counts.end() ? 1 : it->second, labels));
+        page.rows.push_back(rowFor(e, now, NodeCatalog::TickMs, it == counts.end() ? 1 : it->second,
+                                   suspicion ? suspicion->at(e.address) : 0, labels));
     }
     page.queryMs = int(timer.elapsed());
     return page;
 }
 
-NodeExport collectNodes(const NodeCatalog &catalog, const NodeQuery &query, qint64 nowMs, ClientLabelCache &labels)
+NodeExport collectNodes(const NodeCatalog &catalog, const NodeQuery &query, qint64 nowMs, ClientLabelCache &labels,
+                        const AddressSignals *suspicion)
 {
     const AddressCounts counts = countAddresses(catalog);
-    std::vector<NodeCatalog::Slot> matches = filterNodes(catalog, query, labels, &counts);
+    std::vector<NodeCatalog::Slot> matches = filterNodes(catalog, query, labels, &counts, suspicion);
     std::sort(matches.begin(), matches.end(), SlotOrder{catalog, query, labels, &counts});
 
     NodeExport out;
@@ -368,11 +473,13 @@ NodeExport collectNodes(const NodeCatalog &catalog, const NodeQuery &query, qint
     out.nowStamp = catalog.stamp(nowMs);
     out.entries.reserve(matches.size());
     out.nodesAtAddress.reserve(matches.size());
+    out.suspicion.reserve(matches.size());
     for (NodeCatalog::Slot slot : matches) {
         const CatalogEntry &e = catalog.at(slot);
         out.entries.push_back(e);
         const auto it = counts.find(e.address);
         out.nodesAtAddress.push_back(it == counts.end() ? 1 : it->second);
+        out.suspicion.push_back(suspicion ? suspicion->at(e.address) : 0);
     }
     return out;
 }
@@ -390,12 +497,14 @@ bool writeNodesCsv(const NodeExport &nodes, const QString &path, QString *error)
     buffer.reserve(1 << 20);
     buffer += "address,port,family,state,answered,client,version,client_kind,v_hex,rtt_ms,bep42,"
               "node_id,nodes_at_address,failures,sightings,first_seen_s_ago,last_answered_s_ago,"
-              "last_queried_s_ago\n";
+              "last_queried_s_ago,bep51,bep51_samples,bep44,bep32,sends_ip,unknown_query,lists_bad_addresses,"
+              "self_list_share,suspicious,address_problem\n";
 
     ClientLabelCache labels;
     const auto seconds = [](qint64 ms) { return ms < 0 ? QByteArray() : QByteArray::number(ms / 1000); };
     for (size_t i = 0; i < nodes.entries.size(); ++i) {
-        const NodeListRow row = rowFor(nodes.entries[i], nodes.nowStamp, nodes.tickMs, nodes.nodesAtAddress[i], labels);
+        const NodeListRow row = rowFor(nodes.entries[i], nodes.nowStamp, nodes.tickMs, nodes.nodesAtAddress[i],
+                                       i < nodes.suspicion.size() ? nodes.suspicion[i] : 0, labels);
         buffer += csvField(row.endpoint.address.toString()) + ',';
         buffer += QByteArray::number(row.endpoint.port) + ',';
         buffer += (row.endpoint.family() == Family::IPv4 ? "ipv4," : "ipv6,");
@@ -413,7 +522,19 @@ bool writeNodesCsv(const NodeExport &nodes, const QString &path, QString *error)
         buffer += QByteArray::number(row.sightings) + ',';
         buffer += seconds(row.firstSeenAgoMs) + ',';
         buffer += seconds(row.lastAnsweredAgoMs) + ',';
-        buffer += seconds(row.lastQueriedAgoMs) + '\n';
+        buffer += seconds(row.lastQueriedAgoMs) + ',';
+        const auto text = [](const QString &s) { return s.toLatin1() + ','; };
+        const bool listed = row.selfListSharePercent >= 0;
+        buffer += text(featureAnswer(row.flags, CatalogEntry::Tested51, CatalogEntry::Has51));
+        buffer += ((row.flags & CatalogEntry::Has51) ? QByteArray::number(row.bep51Samples) : QByteArray()) + ',';
+        buffer += text(featureAnswer(row.flags, CatalogEntry::Tested44, CatalogEntry::Has44));
+        buffer += text(featureAnswer(row.flags, CatalogEntry::Tested32, CatalogEntry::Has32));
+        buffer += text(featureAnswer(row.flags, CatalogEntry::TestedIp, CatalogEntry::SendsIp));
+        buffer += text(unknownQueryAnswer(row.flags));
+        buffer += QByteArray(listed ? ((row.flags & CatalogEntry::ListsBogons) ? "yes" : "no") : "") + ',';
+        buffer += (listed ? QByteArray::number(row.selfListSharePercent) : QByteArray()) + ',';
+        buffer += csvField(signalNames(row.suspicion)) + ',';
+        buffer += (row.problem == AddressProblem::None ? QByteArray() : csvField(addressProblemName(row.problem))) + '\n';
         if (buffer.size() > (1 << 20) - 1024) {
             if (file.write(buffer) != buffer.size()) {
                 if (error)

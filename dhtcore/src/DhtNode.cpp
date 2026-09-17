@@ -1,5 +1,7 @@
 #include "dhtcore/DhtNode.h"
 
+#include "dhtcore/Inbound.h"
+
 #include <QNetworkDatagram>
 #include <QUdpSocket>
 #include <QVariant>
@@ -209,6 +211,9 @@ void DhtNode::handleDatagram(const QByteArray &data, const Endpoint &from)
 void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from, const QByteArray &datagram)
 {
     const qint64 now = nowMs();
+    // Every query counts towards who talks to us, whether or not we answer.
+    if (m_inbound)
+        m_inbound->record(from, message);
     if (!m_limiter.allow(from.address, now)) {
         ++m_stats.rateLimited;
         return;
@@ -302,6 +307,25 @@ void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from, co
 
     if (method == "get") {
         handleGet(message, from, now);
+        return;
+    }
+
+    if (method == "sample_infohashes") {
+        // BEP 51: a random sample of the infohashes we hold, how many there
+        // are in all, and nodes near the target like find_node.
+        const auto target = NodeId::fromBytes(args.stringAt("target").value_or(QByteArray()));
+        if (!target) {
+            sendError(message.transactionId, from, krpc::ProtocolError, "missing or invalid target");
+            return;
+        }
+        BValue::Dict values = nodesFor(*target, args);
+        QByteArray samples;
+        for (const NodeId &infohash : m_storage->sampleInfohashes(MaxSamples))
+            samples += infohash.toBytes();
+        values.insert_or_assign("samples", BValue(samples));
+        values.insert_or_assign("num", BValue(qint64(m_storage->infohashCount())));
+        values.insert_or_assign("interval", BValue(qint64(SampleIntervalSeconds)));
+        sendResponse(message, from, std::move(values));
         return;
     }
 

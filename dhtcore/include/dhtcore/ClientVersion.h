@@ -40,6 +40,17 @@ ClientInfo decodeClientVersion(const QByteArray &v);
 // Name for a two-character client code, empty when unknown.
 QString clientName(const QString &code);
 
+// How many answering addresses report one client (and, in the detailed
+// list, one version of it). Fractional: an address running several nodes
+// is split evenly between what they report.
+struct ClientTally
+{
+    QString name;     // "libtorrent (Rasterbar)", "no version sent", "unknown client ZZ", ...
+    QString version;  // "2.0.11"; "bytes ab cd" when the layout is unpublished; empty in the by-name list
+    QString kind;     // known, unknown, nonstandard, absent
+    double count = 0;
+};
+
 QString clientKindName(ClientInfo::Kind kind);
 
 // How statistics and the node list name a client: the client's name when

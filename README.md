@@ -15,12 +15,12 @@ Two jobs, one tool:
 
 | Area | State |
 |---|---|
-| DHT engine (`dhtcore`) | Working: BEP 5, BEP 32, BEP 42, BEP 43, BEP 44, peer storage |
+| DHT engine (`dhtcore`) | Working: BEP 5, BEP 32, BEP 42, BEP 43, BEP 44, BEP 51, peer storage |
 | Port forwarding | Working against test gateways: PCP with NAT-PMP fallback |
 | Setup tab | Working |
 | Search tab | Working: peer and item lookups, announce, BEP 44 publishing |
 | Data Store tab | Working: announced peers with addresses and expiry |
-| Global Health tab | In progress: network scan, address counts, quick and precise size, statistics, filterable node list with export; feature checks to come |
+| Global Health tab | In progress: network scan, address counts, quick and precise size, statistics, feature checks, queries to us, suspicious groups, filterable node list with export; charts over time to come |
 | Probe Node tab | Working: one node, any query, replies decoded in full |
 
 ### What the engine does
@@ -31,7 +31,9 @@ Two jobs, one tool:
   well-known bootstrap routers. Routers are used to join but never enter the
   routing table.
 - Answers `ping`, `find_node`, `get_peers` and `announce_peer`, honours BEP 32
-  `want`, and stores announced peers for 30 minutes.
+  `want`, and stores announced peers for 30 minutes. Answers BEP 51
+  `sample_infohashes` with up to 20 random stored infohashes and a six-hour
+  interval.
 - Establishes its own external address from what a clear majority of other
   nodes report. With BEP 42 on (the default) it then switches to a compliant ID
   for that address and includes `ip` in every response; local-network addresses
@@ -84,14 +86,40 @@ Two jobs, one tool:
   in a slice given how many nodes it runs (Horvitz-Thompson), so busy hosts
   are not multiplied. Eight slices per family give a mean and a 95%
   interval.
+- Feature checks: every answering node is sent, one at a time and within
+  the same per-host limit, `sample_infohashes` (BEP 51), `get` (BEP 44) and a
+  query no DHT defines, which BEP 5 says should get error 204. The first two
+  ask for both families' nodes, which doubles as a BEP 32 check, and every
+  reply shows whether the node sends `ip` (BEP 42). A check that goes
+  unanswered twice counts as "no". The scan keeps three quarters of each
+  batch; the checks get the rest and anything the scan leaves.
+- Bad addresses: listed addresses that cannot be contacted are never
+  queried, and are counted by reason: port 0, unspecified, private or local,
+  multicast or broadcast, and reserved (documentation, benchmarking, shared
+  address space, 240/4, IPv6 outside 2000::/3). Nodes that list any are
+  counted too.
+- Queries to us: every query this node receives is counted by source
+  address (up to 500,000 addresses), with the client each sent, the
+  methods used, and how many addresses flagged themselves read-only
+  (BEP 43). Read-only nodes never answer and are never listed, so this is
+  the only place they appear.
+- Suspicious groups, over answering nodes, as leads rather than verdicts:
+  addresses running 5 or more nodes; /24 or /48 subnets with 8 or more
+  answering addresses; one node ID answering from several addresses; ranges
+  of the ID space holding more IDs than chance allows (Poisson, adjusted for
+  the number of ranges, at four depths); and nodes whose listed neighbours
+  are mostly in their own subnet. Addresses showing two or more signals are
+  listed first. Every group has a link that filters the node list to it.
 - Node list: every node found, one row per address and port, filtered by
   family, status, client, version, BEP 42, round trip, address or subnet,
-  port and nodes per address, sorted and paged by the engine so it stays
-  quick with millions of entries. Each address opens the node on the Probe
-  tab.
+  node ID prefix, port, nodes per address, feature check results and
+  suspicious signals, sorted and paged by the engine so it stays quick with
+  millions of entries. Rows show features found and any signals, or why an
+  address was not contacted. Each address opens the node on the Probe tab.
 - Export, only when asked: every node matching the filters as CSV (written
-  on a background thread), or the statistics, size estimates and precise
-  count as JSON. Nothing is saved otherwise.
+  on a background thread, with feature results and signals), or the
+  statistics, size estimates, precise count, queries to us and suspicious
+  groups as JSON. Nothing is saved otherwise.
 - BEP 43 read-only mode, off by default and switchable while running: every
   query we send carries `ro`, and every query we receive is dropped without a
   reply, so the store gains nothing while it is on. Our own lookups still work.
@@ -104,8 +132,7 @@ Two jobs, one tool:
 - BEP 44: stores immutable and mutable items, with Ed25519 signature checks,
   sequence numbers and compare-and-swap. Items expire after two hours.
 
-Not yet implemented: BEP 33 (scrape), BEP 51 (infohash sampling), UPnP port
-mapping.
+Not yet implemented: BEP 33 (scrape), UPnP port mapping.
 
 ## Layout
 

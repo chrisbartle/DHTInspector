@@ -9,6 +9,7 @@ qt_add_executable(dhtcore_tests
     TestCensus.cpp
     TestClientVersion.cpp
     TestEngine.cpp
+    TestInbound.cpp
     TestKrpc.cpp
     TestNetworkStats.cpp
     TestNodeCatalog.cpp
@@ -17,6 +18,7 @@ qt_add_executable(dhtcore_tests
     TestRoutingTable.cpp
     TestRpcManager.cpp
     TestSupport.cpp
+    TestSybil.cpp
 )
 
 target_link_libraries(dhtcore_tests PRIVATE

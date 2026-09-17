@@ -68,6 +68,24 @@ QByteArray CatalogEntry::versionBytes() const
     return out;
 }
 
+void CatalogEntry::setFeatureTries(int tries)
+{
+    flags = (flags & ~(3u << TriesShift)) | (quint32(std::clamp(tries, 0, 3)) << TriesShift);
+}
+
+void CatalogEntry::setSampleCount(qint64 count)
+{
+    const quint32 value = quint32(std::clamp<qint64>(count, 0, MaxSampleCount));
+    flags = (flags & ((1u << SampleCountShift) - 1)) | (value << SampleCountShift);
+}
+
+quint64 CatalogEntry::versionKeyFor(const QByteArray &v)
+{
+    CatalogEntry e;
+    e.setVersion(v);
+    return e.versionKey();
+}
+
 quint64 CatalogEntry::versionKey() const
 {
     return (quint64(versionLength) << 32) | (quint64(version[0]) << 24) | (quint64(version[1]) << 16)

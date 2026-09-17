@@ -27,10 +27,15 @@ Panel {
     property string address: ""
     property string port: ""
     property string minNodes: ""
+    property string idPrefix: ""
+    property string feature: ""
+    property string suspicion: ""
     property string sort: "address"
     property bool descending: false
 
     readonly property string addressError: DhtController.validateAddressFilter(address)
+    readonly property string idPrefixError: DhtController.validateIdPrefixFilter(idPrefix)
+    readonly property string filterError: addressError !== "" ? addressError : idPrefixError
 
     title: qsTr("Nodes")
     subtitle: qsTr("Every node the scan has found, one row per address and port. Narrow it down with the filters, then click an address to examine that node on the Probe tab.")
@@ -56,6 +61,9 @@ Panel {
             address: address,
             port: number(port, 0),
             minNodes: number(minNodes, 0),
+            idPrefix: idPrefix,
+            feature: feature,
+            suspicion: suspicion,
             sort: sort,
             descending: descending,
             offset: offset,
@@ -84,6 +92,11 @@ Panel {
     }
 
     function reset() {
+        clearFilters()
+        apply()
+    }
+
+    function clearFilters() {
         family = "any"
         states = ["responsive", "gone", "silent", "awaiting", "unreachable"]
         client = ""
@@ -94,14 +107,32 @@ Panel {
         address = ""
         port = ""
         minNodes = ""
+        idPrefix = ""
+        feature = ""
+        suspicion = ""
         sort = "address"
         descending = false
-        // A choice made in a drop-down replaces its binding, so set them.
+        syncBoxes()
+    }
+
+    // A choice made in a drop-down replaces its binding, so set them.
+    function syncBoxes() {
         familyBox.currentIndex = familyBox.indexOfValue(family)
         bep42Box.currentIndex = bep42Box.indexOfValue(bep42)
+        featureBox.currentIndex = featureBox.indexOfValue(feature)
+        suspicionBox.currentIndex = suspicionBox.indexOfValue(suspicion)
         sortBox.currentIndex = sortBox.indexOfValue(sort)
         clientBox.refresh()
         versionBox.refresh()
+    }
+
+    // Shows one group from elsewhere on the page: clears the filters, then
+    // applies the ones given (any of the filter properties above).
+    function showGroup(filters) {
+        clearFilters()
+        for (const key in filters)
+            panel[key] = filters[key]
+        syncBoxes()
         apply()
     }
 
@@ -287,6 +318,68 @@ Panel {
 
         ColumnLayout {
             spacing: 2
+            FilterLabel { text: qsTr("Node ID prefix") }
+            ThemedTextField {
+                Accessible.name: qsTr("Node ID prefix filter")
+                implicitWidth: 170
+                placeholderText: qsTr("hex, e.g. a1b2/13")
+                font.family: Theme.monoFamily
+                text: panel.idPrefix
+                invalid: panel.idPrefixError !== ""
+                onTextChanged: if (text !== panel.idPrefix) { panel.idPrefix = text; if (panel.idPrefixError === "") panel.changed() }
+            }
+        }
+
+        ColumnLayout {
+            spacing: 2
+            FilterLabel { text: qsTr("Feature") }
+            ThemedComboBox {
+                id: featureBox
+                Accessible.name: qsTr("Feature filter")
+                implicitWidth: 230
+                model: [{ label: qsTr("Any"), value: "" },
+                        { label: qsTr("BEP 51 supported"), value: "bep51-yes" },
+                        { label: qsTr("BEP 51 not supported"), value: "bep51-no" },
+                        { label: qsTr("BEP 44 supported"), value: "bep44-yes" },
+                        { label: qsTr("BEP 44 not supported"), value: "bep44-no" },
+                        { label: qsTr("BEP 32 lists both families"), value: "bep32-yes" },
+                        { label: qsTr("BEP 32 one family only"), value: "bep32-no" },
+                        { label: qsTr("Sends ip field"), value: "ip-yes" },
+                        { label: qsTr("No ip field"), value: "ip-no" },
+                        { label: qsTr("Unknown query: error 204"), value: "unknown-204" },
+                        { label: qsTr("Unknown query: another error"), value: "unknown-error" },
+                        { label: qsTr("Unknown query: a normal reply"), value: "unknown-reply" },
+                        { label: qsTr("Unknown query: no answer"), value: "unknown-none" },
+                        { label: qsTr("Lists unreachable addresses"), value: "bogons" }]
+                currentIndex: indexOfValue(panel.feature)
+                Component.onCompleted: currentIndex = indexOfValue(panel.feature)
+                onCurrentValueChanged: if (currentValue !== undefined && currentValue !== panel.feature) { panel.feature = currentValue; panel.changed() }
+            }
+        }
+
+        ColumnLayout {
+            spacing: 2
+            FilterLabel { text: qsTr("Suspicious") }
+            ThemedComboBox {
+                id: suspicionBox
+                Accessible.name: qsTr("Suspicious group filter")
+                implicitWidth: 200
+                model: [{ label: qsTr("Any node"), value: "" },
+                        { label: qsTr("Any signal"), value: "any" },
+                        { label: qsTr("Two or more signals"), value: "several" },
+                        { label: qsTr("Many nodes on an address"), value: "many" },
+                        { label: qsTr("Dense subnet"), value: "subnet" },
+                        { label: qsTr("Shared node ID"), value: "sharedId" },
+                        { label: qsTr("Dense node IDs"), value: "denseIds" },
+                        { label: qsTr("Points to itself"), value: "self" }]
+                currentIndex: indexOfValue(panel.suspicion)
+                Component.onCompleted: currentIndex = indexOfValue(panel.suspicion)
+                onCurrentValueChanged: if (currentValue !== undefined && currentValue !== panel.suspicion) { panel.suspicion = currentValue; panel.changed() }
+            }
+        }
+
+        ColumnLayout {
+            spacing: 2
             FilterLabel { text: qsTr("Port") }
             SmallField {
                 Accessible.name: qsTr("Port filter")
@@ -363,8 +456,8 @@ Panel {
 
     Label {
         Layout.fillWidth: true
-        visible: panel.addressError !== "" || (panel.info.error || "") !== ""
-        text: panel.addressError !== "" ? panel.addressError : panel.info.error
+        visible: panel.filterError !== "" || (panel.info.error || "") !== ""
+        text: panel.filterError !== "" ? panel.filterError : panel.info.error
         color: Theme.bad
         font.pixelSize: Theme.fontSizeSmall
     }
@@ -425,7 +518,9 @@ Panel {
         { title: qsTr("On address"), width: 80 },
         { title: qsTr("Last answer"), width: 110 },
         { title: qsTr("First seen"), width: 110 },
-        { title: qsTr("Node ID"), width: 130 }
+        { title: qsTr("Node ID"), width: 130 },
+        { title: qsTr("Features"), width: 100 },
+        { title: qsTr("Notes"), width: 150 }
     ]
 
     component Cell: Label {
@@ -492,6 +587,10 @@ Panel {
             required property string nodeId
             required property string nodeIdShort
             required property string rawVersion
+            required property string features
+            required property string featureDetail
+            required property string suspicion
+            required property string problem
 
             width: ListView.view.width
             height: 26
@@ -563,6 +662,25 @@ Panel {
                     ToolTip.delay: 500
                     ToolTip.text: row.nodeId
                     HoverHandler { id: idHover }
+                }
+                Cell {
+                    cellWidth: panel.columns[9].width
+                    text: !row.answered ? "—" : row.features === "" ? qsTr("none yet") : row.features
+                    color: row.features === "" ? Theme.textFaint : Theme.textDim
+                    ToolTip.visible: featureHover.hovered && row.answered
+                    ToolTip.delay: 500
+                    ToolTip.text: row.featureDetail
+                    HoverHandler { id: featureHover }
+                }
+                Cell {
+                    cellWidth: panel.columns[10].width
+                    text: row.problem !== "" ? row.problem : row.suspicion !== "" ? row.suspicion : "—"
+                    color: row.problem !== "" ? Theme.textDim : row.suspicion !== "" ? Theme.warn : Theme.textFaint
+                    ToolTip.visible: notesHover.hovered && text !== "—"
+                    ToolTip.delay: 500
+                    ToolTip.text: row.problem !== "" ? qsTr("Not contacted: %1").arg(row.problem)
+                                                     : qsTr("Suspicious signals for this address: %1").arg(row.suspicion)
+                    HoverHandler { id: notesHover }
                 }
             }
         }

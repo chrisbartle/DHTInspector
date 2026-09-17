@@ -77,6 +77,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
         return false;
     }
     connect(m_v4, &DhtNode::changed, this, &DhtEngine::scheduleSnapshot);
+    m_v4->setInbound(&m_inbound);
 
     if (config.enableIpv6) {
         NodeConfig v6 = v4;
@@ -87,6 +88,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
         m_v6 = new DhtNode(v6, &m_storage, &m_items, &m_budget, this);
         if (m_v6->bind(&m_v6Error)) {
             connect(m_v6, &DhtNode::changed, this, &DhtEngine::scheduleSnapshot);
+            m_v6->setInbound(&m_inbound);
             m_v4->setSibling(m_v6);
             m_v6->setSibling(m_v4);
         } else {
@@ -100,6 +102,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
     crawl.allowLocalAddresses = config.allowLocalAddresses;
     m_crawler = new Crawler(&m_catalog, crawl, this);
     m_crawler->setNodes(m_v4, m_v6);
+    m_crawler->setInbound(&m_inbound);
 
     CensusConfig census = config.census;
     census.allowLocalAddresses = config.allowLocalAddresses;
@@ -141,6 +144,7 @@ void DhtEngine::shutdown()
     delete m_crawler;
     m_crawler = nullptr;
     m_catalog.clear();
+    m_inbound.clear();
 
     const auto destroy = [this](DhtNode *&node) {
         if (!node)
@@ -259,14 +263,19 @@ void DhtEngine::cancelCensus()
 
 void DhtEngine::queryNodes(const NodeQuery &query, quint64 requestId)
 {
-    NodeListPage page = dht::queryNodes(m_catalog, query, nowMs(), m_labels);
+    const auto stats = m_crawler ? m_crawler->stats() : nullptr;
+    NodeListPage page = dht::queryNodes(m_catalog, query, nowMs(), m_labels,
+                                        stats ? stats->suspicious.addressSignals.get() : nullptr);
     page.requestId = requestId;
     emit nodePageReady(page);
 }
 
 void DhtEngine::exportNodes(const NodeQuery &query, quint64 requestId)
 {
-    emit nodeExportReady(requestId, std::make_shared<NodeExport>(collectNodes(m_catalog, query, nowMs(), m_labels)));
+    const auto stats = m_crawler ? m_crawler->stats() : nullptr;
+    emit nodeExportReady(requestId, std::make_shared<NodeExport>(collectNodes(
+                                        m_catalog, query, nowMs(), m_labels,
+                                        stats ? stats->suspicious.addressSignals.get() : nullptr)));
 }
 
 void DhtEngine::setCatalogCap(int cap)

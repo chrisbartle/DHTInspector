@@ -2,6 +2,7 @@
 
 #include "dhtcore/Bep42.h"
 #include "dhtcore/DhtNode.h"
+#include "dhtcore/Inbound.h"
 #include "dhtcore/Support.h"
 
 #include <algorithm>
@@ -105,7 +106,15 @@ void Crawler::tick()
         widen();
     }
 
-    int sent = backlogged() ? 0 : dispatchDeferred(m_batch, now);
+    // Discovery and rechecks go first, keeping a share of the batch for
+    // feature checks; those only go to hosts with room left, so where the
+    // per-host limit holds things back, the scan itself keeps priority.
+    const int scanShare = m_batch - std::max(1, m_batch / FeatureShareDivisor);
+    int sent = backlogged() ? 0 : dispatchDeferred(scanShare, now);
+    while (sent < scanShare && !backlogged() && dispatchNext(now))
+        ++sent;
+    if (!backlogged())
+        sent += dispatchFeatures(m_batch - sent, now);
     while (sent < m_batch && !backlogged() && dispatchNext(now))
         ++sent;
     m_lastTickFull = sent >= m_batch;
@@ -190,7 +199,13 @@ void Crawler::recordLookup(Family family, const NodeId &target, const std::vecto
 
 void Crawler::refreshStats(qint64 now)
 {
+    QElapsedTimer timer;
+    timer.start();
     auto stats = std::make_shared<NetworkStatsSet>(computeNetworkStats(*m_catalog, now));
+    stats->suspicious = computeSybilReport(*m_catalog);
+    if (m_inbound)
+        stats->inbound = m_inbound->summary();
+    stats->computeMs = int(timer.elapsed());
     m_nextStatsMs = now + std::max<qint64>(StatsIntervalMs, qint64(StatsCostFactor) * stats->computeMs);
     m_stats = std::move(stats);
 }
@@ -344,8 +359,11 @@ void Crawler::onReply(Ref ref, const RpcReply &reply)
                 entry.id = *id;
                 entry.bep42 = quint8(bep42::check(*id, entry.hostAddress()));
             }
+            if (reply.status == RpcReply::Status::Response)
+                noteResponse(entry, reply);
             m_catalog->setState(slot, CatalogEntry::State::Responsive);
             m_revisit.push_back(ref);
+            queueFeatures(ref);
         }
     } else {
         ++(reply.status == RpcReply::Status::Timeout ? m_timeouts
@@ -355,19 +373,199 @@ void Crawler::onReply(Ref ref, const RpcReply &reply)
     // After the entry is updated: learning can grow the catalogue, which
     // invalidates references into it.
     if (reply.status == RpcReply::Status::Response)
-        learnFrom(reply, now);
+        learnFrom(ref, reply, now);
 }
 
-void Crawler::learnFrom(const RpcReply &reply, qint64 now)
+void Crawler::noteResponse(CatalogEntry &entry, const RpcReply &reply)
+{
+    entry.set(CatalogEntry::TestedIp);
+    entry.set(CatalogEntry::SendsIp, reply.message.reportedAddress.has_value());
+}
+
+void Crawler::learnFrom(Ref ref, const RpcReply &reply, qint64 now)
 {
     const BValue &body = reply.message.body;
+    std::vector<krpc::CompactNode> listed;
     for (Family family : {Family::IPv4, Family::IPv6}) {
         const QByteArray key = family == Family::IPv4 ? QByteArray("nodes") : QByteArray("nodes6");
         if (const auto bytes = body.stringAt(key)) {
-            for (const krpc::CompactNode &n : krpc::decodeNodes(*bytes, family).nodes)
-                learn(n, now);
+            const auto nodes = krpc::decodeNodes(*bytes, family).nodes;
+            listed.insert(listed.end(), nodes.begin(), nodes.end());
         }
     }
+
+    // What the responder lists says something about it: a node listing
+    // mostly its own address or subnet may be part of a group pushing its
+    // own nodes, and one listing unreachable addresses is passing on junk.
+    if (!listed.empty() && m_catalog->isCurrent(ref)) {
+        CatalogEntry &entry = m_catalog->at(ref.slot);
+        int bits = 0;
+        const QHostAddress subnet = subnetOf(entry.hostAddress(), &bits);
+        // The share is over the responder's own family, which is all a
+        // subnet can match.
+        const Family family = entry.family();
+        int sameFamily = 0;
+        int own = 0;
+        bool bogons = false;
+        for (const krpc::CompactNode &n : listed) {
+            if (n.endpoint.family() == family) {
+                ++sameFamily;
+                own += n.endpoint.address.isInSubnet(subnet, bits) ? 1 : 0;
+            }
+            if (!isUsableRemote(n.endpoint, m_config.allowLocalAddresses))
+                bogons = true;
+        }
+        if (sameFamily > 0)
+            entry.selfListShare = quint8((own * 100 + sameFamily / 2) / sameFamily);
+        entry.set(CatalogEntry::ListsBogons, bogons || entry.has(CatalogEntry::ListsBogons));
+    }
+
+    // Learning can grow the catalogue, so the entry is not touched after this.
+    for (const krpc::CompactNode &n : listed)
+        learn(n, now);
+}
+
+void Crawler::queueFeatures(Ref ref)
+{
+    CatalogEntry &entry = m_catalog->at(ref.slot);
+    if (entry.featuresDone() || entry.has(CatalogEntry::FeatureQueued))
+        return;
+    entry.set(CatalogEntry::FeatureQueued);
+    m_features.push_back(ref);
+}
+
+int Crawler::dispatchFeatures(int budget, qint64 now)
+{
+    Q_UNUSED(now);
+    int sent = 0;
+    const int scan = std::min(int(m_features.size()), DeferredScanPerTick);
+    for (int i = 0; i < scan && sent < budget; ++i) {
+        const Ref ref = m_features.front();
+        m_features.pop_front();
+        if (!m_catalog->isCurrent(ref))
+            continue;
+        CatalogEntry &entry = m_catalog->at(ref.slot);
+        // Only nodes that are answering are worth the queries; the flag is
+        // cleared so they are queued again when they next answer.
+        if (entry.state != CatalogEntry::State::Responsive || entry.featuresDone()
+            || !nodeFor(entry.family())) {
+            entry.set(CatalogEntry::FeatureQueued, false);
+            continue;
+        }
+        if (hostBusy(entry)) {
+            m_features.push_back(ref);
+            continue;
+        }
+        askFeature(ref.slot);
+        ++sent;
+    }
+    return sent;
+}
+
+void Crawler::askFeature(Slot slot)
+{
+    CatalogEntry &entry = m_catalog->at(slot);
+    const Endpoint endpoint = entry.endpoint();
+    DhtNode *node = nodeFor(entry.family());
+
+    BValue::Dict args;
+    QByteArray method;
+    CatalogEntry::Flag check;
+    // Asking for both families' nodes doubles as the BEP 32 check.
+    const auto withTarget = [&args] {
+        args.emplace("target", BValue(NodeId::random().toBytes()));
+        args.emplace("want", BValue(BValue::List{BValue("n4"), BValue("n6")}));
+    };
+    if (!entry.has(CatalogEntry::Tested51)) {
+        method = "sample_infohashes";
+        check = CatalogEntry::Tested51;
+        withTarget();
+    } else if (!entry.has(CatalogEntry::Tested44)) {
+        method = "get";
+        check = CatalogEntry::Tested44;
+        withTarget();
+    } else {
+        method = UnknownMethod;
+        check = CatalogEntry::TestedUnknown;
+    }
+
+    const Ref ref = m_catalog->ref(slot);
+    ++m_outstanding;
+    ++m_featureQueries;
+    QPointer<Crawler> self(this);
+    node->probe(
+        endpoint, method, std::move(args),
+        [self, ref, check](const RpcReply &reply) {
+            if (self)
+                self->onFeatureReply(ref, check, reply);
+        },
+        m_config.queryTimeoutMs);
+}
+
+void Crawler::onFeatureReply(Ref ref, CatalogEntry::Flag check, const RpcReply &reply)
+{
+    --m_outstanding;
+    if (!m_catalog->isCurrent(ref))
+        return;
+    using F = CatalogEntry;
+    const qint64 now = nowMs();
+    CatalogEntry &entry = m_catalog->at(ref.slot);
+    const krpc::Message &m = reply.message;
+
+    switch (reply.status) {
+    case RpcReply::Status::Throttled:
+        break;  // never sent: ask again later
+    case RpcReply::Status::Timeout:
+        // Nodes drop the odd datagram; a check only counts as unanswered
+        // after a second try. Liveness is left to the regular rounds.
+        entry.setFeatureTries(entry.featureTries() + 1);
+        if (entry.featureTries() >= FeatureTries) {
+            entry.set(check);
+            entry.setFeatureTries(0);
+        }
+        break;
+    case RpcReply::Status::Response:
+    case RpcReply::Status::Error: {
+        const bool response = reply.status == RpcReply::Status::Response;
+        entry.set(check);
+        entry.setFeatureTries(0);
+        if (response) {
+            noteResponse(entry, reply);
+            if (check != F::TestedUnknown) {
+                // Asked for both families: listing the other one is BEP 32.
+                const bool v4 = entry.isIPv4();
+                entry.set(F::Tested32);
+                entry.set(F::Has32, m.body.stringAt(v4 ? "nodes6" : "nodes").has_value()
+                                        || entry.has(F::Has32));
+            }
+        }
+        if (check == F::Tested51) {
+            // Nodes that do not know the method may still answer as if it
+            // were find_node; only the BEP 51 fields count.
+            const bool has = response && (m.body.stringAt("samples") || m.body.integerAt("num"));
+            entry.set(F::Has51, has);
+            if (has)
+                entry.setSampleCount(m.body.integerAt("num").value_or(0));
+        } else if (check == F::Tested44) {
+            // A get for a missing item still returns a write token.
+            entry.set(F::Has44, response && m.body.stringAt("token").has_value());
+        } else {
+            const bool is204 = !response && m.errorCode == krpc::MethodUnknown;
+            entry.set(F::Answers204, is204);
+            entry.set(F::AnswersOther, !is204);
+            entry.set(F::AnswersError, !is204 && !response);
+        }
+        break;
+    }
+    }
+
+    if (entry.featuresDone())
+        entry.set(F::FeatureQueued, false);
+    else
+        m_features.push_back(ref);
+
+    if (reply.status == RpcReply::Status::Response)
+        learnFrom(ref, reply, now);
 }
 
 void Crawler::learn(const krpc::CompactNode &listed, qint64 now)
@@ -386,7 +584,9 @@ void Crawler::learn(const krpc::CompactNode &listed, qint64 now)
         return;
 
     entry.id = listed.id;
-    if (!isUsableRemote(listed.endpoint, m_config.allowLocalAddresses)) {
+    if (const AddressProblem problem = addressProblem(listed.endpoint, m_config.allowLocalAddresses);
+        problem != AddressProblem::None) {
+        entry.failures = quint8(problem);
         m_catalog->setState(slot, CatalogEntry::State::Unroutable);
         return;
     }
@@ -413,6 +613,8 @@ CrawlSnapshot Crawler::snapshot() const
     s.timeouts = m_timeouts;
     s.notSent = m_notSent;
     s.outstanding = m_outstanding;
+    s.featureQueries = m_featureQueries;
+    s.featureWaiting = int(m_features.size());
     s.waiting = int(m_fresh.size() + m_deferred.size());
     s.batch = m_monitoring ? m_batch : 0;
     s.monitoredMs = m_monitoredMs + (m_monitoring ? now - m_monitoringSinceMs : 0);
@@ -425,7 +627,7 @@ CrawlSnapshot Crawler::snapshot() const
         s.phase = CrawlSnapshot::Phase::Off;
     else if (!m_fresh.empty() || !m_deferred.empty() || s.notAsked > 0)
         s.phase = CrawlSnapshot::Phase::Discovering;
-    else if (m_outstanding > 0 || anyDue(now))
+    else if (m_outstanding > 0 || !m_features.empty() || anyDue(now))
         s.phase = CrawlSnapshot::Phase::Rechecking;
     else if (s.known == 0)
         s.phase = CrawlSnapshot::Phase::WaitingForNodes;

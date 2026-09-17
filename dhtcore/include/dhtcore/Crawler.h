@@ -19,6 +19,7 @@
 namespace dht {
 
 class DhtNode;
+class InboundTally;
 
 struct CrawlConfig
 {
@@ -64,17 +65,27 @@ public:
     static constexpr qint64 StatsIntervalMs = 2000;
     static constexpr int StatsCostFactor = 20;
     static constexpr int MaxEstimates = 6;
-
+    // Feature checks (BEP 51, BEP 44, an unknown query) go one query at a
+    // time to nodes that have answered. A 1/FeatureShareDivisor share of each
+    // tick's batch is kept for them, and they get whatever the scan leaves.
+    static constexpr int FeatureShareDivisor = 4;
+    static constexpr int FeatureTries = 2;
+    // Method name for the unknown-query check; no DHT defines it.
+    static constexpr const char *UnknownMethod = "dhtinspector_unknown";
 
     Crawler(NodeCatalog *catalog, const CrawlConfig &config, QObject *parent = nullptr);
 
     void setNodes(DhtNode *v4, DhtNode *v6);
+    // Where the engine counts queries sent to us; summarised with the stats.
+    void setInbound(const InboundTally *inbound) { m_inbound = inbound; }
 
     // Off pauses: what has been learned is kept.
     void setMonitoring(bool on);
     bool isMonitoring() const { return m_monitoring; }
 
     CrawlSnapshot snapshot() const;
+    // The latest statistics, or null before the first pass.
+    std::shared_ptr<const NetworkStatsSet> stats() const { return m_stats; }
 
 private:
     using Ref = NodeCatalog::Ref;
@@ -88,7 +99,12 @@ private:
     void ask(Slot slot, bool firstContact, qint64 now);
     void onReply(Ref ref, const RpcReply &reply);
     void learn(const krpc::CompactNode &listed, qint64 now);
-    void learnFrom(const RpcReply &reply, qint64 now);
+    void learnFrom(Ref ref, const RpcReply &reply, qint64 now);
+    void noteResponse(CatalogEntry &entry, const RpcReply &reply);
+    void queueFeatures(Ref ref);
+    int dispatchFeatures(int budget, qint64 now);
+    void askFeature(Slot slot);
+    void onFeatureReply(Ref ref, CatalogEntry::Flag check, const RpcReply &reply);
     void seed(qint64 now);
     void widen();
     void refreshStats(qint64 now);
@@ -117,6 +133,8 @@ private:
         bool firstContact;
     };
     std::deque<Deferred> m_deferred;  // due, but their host is busy
+    std::deque<Ref> m_features;       // answering nodes with feature checks left
+    const InboundTally *m_inbound = nullptr;
     std::array<bool, 2> m_widening{};  // per family: a widening lookup is running
     std::array<int, 2> m_estimating{};  // per family: size lookups running
     std::array<SizeEstimator, 2> m_size;
@@ -138,6 +156,7 @@ private:
     qint64 m_errors = 0;
     qint64 m_timeouts = 0;
     qint64 m_notSent = 0;
+    qint64 m_featureQueries = 0;
 };
 
 } // namespace dht

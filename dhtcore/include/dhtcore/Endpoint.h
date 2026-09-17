@@ -46,9 +46,23 @@ struct Endpoint
 
 size_t qHash(const Endpoint &endpoint, size_t seed = 0) noexcept;
 
-// Whether an endpoint handed to us by the network is worth contacting.
-// Unspecified, multicast, broadcast and zero-port endpoints never are;
-// local addresses only when explicitly allowed (LAN testing).
+// Why an endpoint handed to us by the network cannot be contacted.
+enum class AddressProblem : quint8 {
+    None,
+    ZeroPort,     // port 0
+    Unspecified,  // 0.0.0.0/8 or ::
+    Local,        // loopback, private, link-local, unique-local
+    Multicast,    // multicast or broadcast
+    Reserved,     // documentation, benchmarking, shared (CGNAT), 240/4, IPv6 outside 2000::/3
+};
+constexpr int AddressProblemCount = 6;
+
+QString addressProblemName(AddressProblem problem);
+AddressProblem addressProblem(const Endpoint &endpoint, bool allowLocal);
+
+// Whether an endpoint handed to us by the network is worth contacting:
+// it has no AddressProblem. Local addresses are fine only when explicitly
+// allowed (LAN testing).
 bool isUsableRemote(const Endpoint &endpoint, bool allowLocal);
 
 struct HostPort

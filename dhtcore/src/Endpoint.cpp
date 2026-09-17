@@ -99,20 +99,61 @@ size_t qHash(const Endpoint &endpoint, size_t seed) noexcept
     return qHashMulti(seed, endpoint.address, endpoint.port);
 }
 
+QString addressProblemName(AddressProblem problem)
+{
+    switch (problem) {
+    case AddressProblem::None: return QStringLiteral("None");
+    case AddressProblem::ZeroPort: return QStringLiteral("Port 0");
+    case AddressProblem::Unspecified: return QStringLiteral("Unspecified");
+    case AddressProblem::Local: return QStringLiteral("Private or local");
+    case AddressProblem::Multicast: return QStringLiteral("Multicast or broadcast");
+    case AddressProblem::Reserved: return QStringLiteral("Reserved");
+    }
+    return QString();
+}
+
+AddressProblem addressProblem(const Endpoint &endpoint, bool allowLocal)
+{
+    const QHostAddress &a = endpoint.address;
+    if (a.isNull() || a == QHostAddress(QHostAddress::AnyIPv4) || a == QHostAddress(QHostAddress::AnyIPv6))
+        return AddressProblem::Unspecified;
+    if (a.protocol() == QAbstractSocket::IPv4Protocol && (a.toIPv4Address() >> 24) == 0)
+        return AddressProblem::Unspecified;
+    if (a.isMulticast() || a.isBroadcast())
+        return AddressProblem::Multicast;
+    if (isLocalAddress(a)) {
+        if (!allowLocal)
+            return AddressProblem::Local;
+    } else if (a.protocol() == QAbstractSocket::IPv4Protocol) {
+        static const QList<QPair<QHostAddress, int>> reserved = {
+            QHostAddress::parseSubnet(QStringLiteral("100.64.0.0/10")),
+            QHostAddress::parseSubnet(QStringLiteral("192.0.0.0/24")),
+            QHostAddress::parseSubnet(QStringLiteral("192.0.2.0/24")),
+            QHostAddress::parseSubnet(QStringLiteral("198.18.0.0/15")),
+            QHostAddress::parseSubnet(QStringLiteral("198.51.100.0/24")),
+            QHostAddress::parseSubnet(QStringLiteral("203.0.113.0/24")),
+            QHostAddress::parseSubnet(QStringLiteral("240.0.0.0/4")),
+        };
+        for (const auto &subnet : reserved) {
+            if (a.isInSubnet(subnet))
+                return AddressProblem::Reserved;
+        }
+    } else {
+        // Every globally routed IPv6 address is in 2000::/3.
+        const Q_IPV6ADDR b = a.toIPv6Address();
+        const bool global = (b.c[0] & 0xe0) == 0x20;
+        const bool documentation = b.c[0] == 0x20 && b.c[1] == 0x01 && b.c[2] == 0x0d && b.c[3] == 0xb8;
+        if (!global || documentation)
+            return AddressProblem::Reserved;
+    }
+    if (endpoint.port == 0)
+        return AddressProblem::ZeroPort;
+    return AddressProblem::None;
+}
+
 bool isUsableRemote(const Endpoint &endpoint, bool allowLocal)
 {
-    if (!endpoint.isValid())
-        return false;
-    const QHostAddress &a = endpoint.address;
-    if (a.isMulticast() || a.isBroadcast())
-        return false;
-    if (a == QHostAddress(QHostAddress::AnyIPv4) || a == QHostAddress(QHostAddress::AnyIPv6))
-        return false;
-    if (a.protocol() == QAbstractSocket::IPv4Protocol && (a.toIPv4Address() >> 24) == 0)
-        return false;
-    if (!allowLocal && isLocalAddress(a))
-        return false;
-    return true;
+    return addressProblem(endpoint, allowLocal) == AddressProblem::None;
 }
 
 std::optional<HostPort> parseHostPort(QStringView input, QString *error)

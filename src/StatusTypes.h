@@ -136,6 +136,8 @@ class CrawlStatus
     Q_PROPERTY(double monitoredSeconds MEMBER monitoredSeconds)
     Q_PROPERTY(double queriesPerSecond MEMBER queriesPerSecond)
     Q_PROPERTY(double answersPerSecond MEMBER answersPerSecond)
+    Q_PROPERTY(qint64 featureQueries MEMBER featureQueries)
+    Q_PROPERTY(int featureWaiting MEMBER featureWaiting)
 
 public:
     // One of: off, waiting, discovering, rechecking, up to date.
@@ -158,6 +160,8 @@ public:
     int outstanding = 0;
     int waiting = 0;
     int batch = 0;
+    qint64 featureQueries = 0;
+    int featureWaiting = 0;
     double monitoredSeconds = 0;
     double queriesPerSecond = 0;
     double answersPerSecond = 0;

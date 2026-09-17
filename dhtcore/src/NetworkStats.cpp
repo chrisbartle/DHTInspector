@@ -33,6 +33,11 @@ struct Accumulator
     double rttWeight = 0;
     double rttSumMs = 0;
     std::vector<double> ports = std::vector<double>(65536, 0.0);
+    std::array<FeatureTally, 6> features{};  // bep51, bep44, bep32, sendsIp, answers204, listsBogons
+    double unknownOther = 0;
+    double unknownOtherError = 0;
+    std::vector<std::pair<quint32, double>> samples;  // BEP 51 "num", weighted
+    std::array<int, AddressProblemCount> problems{};
 
     void add(const Accumulator &o)
     {
@@ -53,6 +58,15 @@ struct Accumulator
         rttSumMs += o.rttSumMs;
         for (size_t i = 0; i < ports.size(); ++i)
             ports[i] += o.ports[i];
+        for (size_t i = 0; i < features.size(); ++i) {
+            features[i].tested += o.features[i].tested;
+            features[i].yes += o.features[i].yes;
+        }
+        unknownOther += o.unknownOther;
+        unknownOtherError += o.unknownOtherError;
+        samples.insert(samples.end(), o.samples.begin(), o.samples.end());
+        for (size_t i = 0; i < problems.size(); ++i)
+            problems[i] += o.problems[i];
     }
 };
 
@@ -78,6 +92,30 @@ NetworkStats summarise(const Accumulator &a, const QHash<quint64, ClientInfo> &d
     s.maxNodesPerIp = a.maxNodesPerIp;
     s.answeringNodes = a.answeringNodes;
     s.bep42 = a.bep42;
+    s.bep51 = a.features[0];
+    s.bep44 = a.features[1];
+    s.bep32 = a.features[2];
+    s.sendsIp = a.features[3];
+    s.answers204 = a.features[4];
+    s.listsBogons = a.features[5];
+    s.unknownOther = a.unknownOther;
+    s.unknownOtherError = a.unknownOtherError;
+    s.unroutableByProblem = a.problems;
+    if (!a.samples.empty()) {
+        std::vector<std::pair<quint32, double>> sorted = a.samples;
+        std::sort(sorted.begin(), sorted.end());
+        double total = 0;
+        for (const auto &p : sorted)
+            total += p.second;
+        double seen = 0;
+        for (const auto &p : sorted) {
+            seen += p.second;
+            if (seen >= total / 2 - 1e-9) {
+                s.bep51SamplesMedian = p.first;
+                break;
+            }
+        }
+    }
 
     // Clients: by name, and by name and version.
     QHash<QString, double> byName;
@@ -176,12 +214,26 @@ NetworkStatsSet computeNetworkStats(const NodeCatalog &catalog, qint64 nowMs, in
 
         const CatalogEntry &first = catalog.at(entries[begin].second);
         Accumulator &a = families[first.isIPv4() ? 0 : 1];
-        if (first.state == CatalogEntry::State::Unroutable) {
-            // Unroutability is a property of the address, so the whole run is.
+        // Unreachable entries keep the reason in their failure count. An
+        // address is unreachable when all its entries are; otherwise only
+        // some ports were bad (port 0).
+        bool anyRoutable = false;
+        bool zeroPort = false;
+        for (size_t i = begin; i < end; ++i) {
+            const CatalogEntry &e = catalog.at(entries[i].second);
+            if (e.state != CatalogEntry::State::Unroutable)
+                anyRoutable = true;
+            else if (AddressProblem(e.failures) == AddressProblem::ZeroPort)
+                zeroPort = true;
+        }
+        if (!anyRoutable) {
             ++a.unroutableIps;
+            ++a.problems[std::min<int>(first.failures, AddressProblemCount - 1)];
             begin = end;
             continue;
         }
+        if (zeroPort)
+            ++a.problems[int(AddressProblem::ZeroPort)];
 
         ++a.heardIps;
         bool connected = false;
@@ -212,6 +264,29 @@ NetworkStatsSet computeNetworkStats(const NodeCatalog &catalog, qint64 nowMs, in
                     a.rttSumMs += weight * e.rttMs;
                 }
                 a.ports[e.port] += weight;
+
+                using F = CatalogEntry;
+                const auto tally = [&](FeatureTally &t, F::Flag tested, F::Flag has) {
+                    if (e.has(tested)) {
+                        t.tested += weight;
+                        t.yes += e.has(has) ? weight : 0;
+                    }
+                };
+                tally(a.features[0], F::Tested51, F::Has51);
+                tally(a.features[1], F::Tested44, F::Has44);
+                tally(a.features[2], F::Tested32, F::Has32);
+                tally(a.features[3], F::TestedIp, F::SendsIp);
+                tally(a.features[4], F::TestedUnknown, F::Answers204);
+                if (e.has(F::TestedUnknown) && e.has(F::AnswersOther)) {
+                    a.unknownOther += weight;
+                    a.unknownOtherError += e.has(F::AnswersError) ? weight : 0;
+                }
+                if (e.selfListShare != F::NoShare) {
+                    a.features[5].tested += weight;
+                    a.features[5].yes += e.has(F::ListsBogons) ? weight : 0;
+                }
+                if (e.has(F::Has51))
+                    a.samples.emplace_back(e.sampleCount(), weight);
             }
         }
         begin = end;

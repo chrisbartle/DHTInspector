@@ -112,6 +112,8 @@ CrawlStatus toCrawlStatus(const dht::CrawlSnapshot &c)
     out.outstanding = c.outstanding;
     out.waiting = c.waiting;
     out.batch = c.batch;
+    out.featureQueries = c.featureQueries;
+    out.featureWaiting = c.featureWaiting;
     out.monitoredSeconds = double(c.monitoredMs) / 1000.0;
     return out;
 }
@@ -500,7 +502,166 @@ QVariantMap statsMap(const dht::NetworkStats &s, int shownClients, int shownVers
         {QStringLiteral("defaultShare"), shareOf(s.defaultPortCount, s.answeringIps)},
         {QStringLiteral("top"), ports},
     });
+
+    // Shares are of the addresses checked, -1 while none are.
+    const auto feature = [](const dht::FeatureTally &t) {
+        return QVariantMap{
+            {QStringLiteral("tested"), t.tested},
+            {QStringLiteral("yes"), t.yes},
+            {QStringLiteral("share"), t.tested > 0 ? t.yes / t.tested : -1.0},
+        };
+    };
+    const double unknownTested = s.answers204.tested;
+    out.insert(QStringLiteral("features"), QVariantMap{
+        {QStringLiteral("bep51"), feature(s.bep51)},
+        {QStringLiteral("bep44"), feature(s.bep44)},
+        {QStringLiteral("bep32"), feature(s.bep32)},
+        {QStringLiteral("sendsIp"), feature(s.sendsIp)},
+        {QStringLiteral("listsBogons"), feature(s.listsBogons)},
+        {QStringLiteral("bep51SamplesMedian"), s.bep51SamplesMedian},
+        {QStringLiteral("unknown"), QVariantMap{
+            {QStringLiteral("tested"), unknownTested},
+            {QStringLiteral("error204"), s.answers204.yes},
+            {QStringLiteral("otherError"), s.unknownOtherError},
+            {QStringLiteral("reply"), std::max(0.0, s.unknownOther - s.unknownOtherError)},
+            {QStringLiteral("silent"), std::max(0.0, unknownTested - s.answers204.yes - s.unknownOther)},
+            {QStringLiteral("share204"), unknownTested > 0 ? s.answers204.yes / unknownTested : -1.0},
+        }},
+    });
+
+    QVariantList problems;
+    for (int i = 1; i < dht::AddressProblemCount; ++i) {
+        problems.append(QVariantMap{
+            {QStringLiteral("name"), dht::addressProblemName(dht::AddressProblem(i))},
+            {QStringLiteral("count"), s.unroutableByProblem[size_t(i)]},
+        });
+    }
+    out.insert(QStringLiteral("badAddresses"), QVariantMap{
+        {QStringLiteral("unreachable"), s.unroutableIps},
+        {QStringLiteral("unclassified"), s.unroutableByProblem[0]},
+        {QStringLiteral("byProblem"), problems},
+    });
     return out;
+}
+
+QString idPrefixText(const dht::NodeId &id, int bits)
+{
+    const int digits = (bits + 3) / 4;
+    return id.toHex().left(digits) + QLatin1Char('/') + QString::number(bits);
+}
+
+QString subnetText(const QHostAddress &base, int bits)
+{
+    return base.toString() + QLatin1Char('/') + QString::number(bits);
+}
+
+QVariantList signalList(quint8 bits)
+{
+    QVariantList out;
+    for (const auto &[bit, name] : {std::pair{dht::ManyNodes, "many"}, std::pair{dht::DenseSubnet, "subnet"},
+                                    std::pair{dht::SharedId, "sharedId"}, std::pair{dht::DenseIds, "denseIds"},
+                                    std::pair{dht::PointsToSelf, "self"}}) {
+        if (bits & bit)
+            out.append(QString::fromLatin1(name));
+    }
+    return out;
+}
+
+QVariantMap suspiciousMap(const dht::SybilReport &r)
+{
+    const auto address = [](const dht::SuspectAddress &a) {
+        return QVariantMap{
+            {QStringLiteral("address"), a.address.toString()},
+            {QStringLiteral("nodes"), a.answeringNodes},
+            {QStringLiteral("compliant"), a.compliantNodes},
+            {QStringLiteral("prefixes"), a.distinctPrefixes},
+            {QStringLiteral("signals"), signalList(a.suspicion)},
+            {QStringLiteral("signalText"), dht::signalNames(a.suspicion)},
+        };
+    };
+    QVariantList many, flagged, subnets, shared, windows, self;
+    for (const auto &a : r.manyNodes)
+        many.append(address(a));
+    for (const auto &a : r.flagged)
+        flagged.append(address(a));
+    for (const auto &n : r.denseSubnets) {
+        subnets.append(QVariantMap{
+            {QStringLiteral("subnet"), subnetText(n.base, n.bits)},
+            {QStringLiteral("addresses"), n.addresses},
+            {QStringLiteral("nodes"), n.answeringNodes},
+        });
+    }
+    for (const auto &g : r.sharedIds) {
+        QStringList sample;
+        for (const QHostAddress &a : g.sample)
+            sample << a.toString();
+        shared.append(QVariantMap{
+            {QStringLiteral("id"), g.id.toHex()},
+            {QStringLiteral("addresses"), g.addresses},
+            {QStringLiteral("sample"), sample.join(QStringLiteral(", "))},
+        });
+    }
+    for (const auto &w : r.denseWindows) {
+        windows.append(QVariantMap{
+            {QStringLiteral("prefix"), idPrefixText(w.prefix, w.bits)},
+            {QStringLiteral("bits"), w.bits},
+            {QStringLiteral("nodes"), w.nodes},
+            {QStringLiteral("expected"), w.expected},
+            {QStringLiteral("chance"), w.chance},
+            {QStringLiteral("addresses"), w.addresses},
+        });
+    }
+    for (const auto &p : r.selfPointers) {
+        self.append(QVariantMap{
+            {QStringLiteral("address"), dht::Endpoint(p.address, p.port).toString()},
+            {QStringLiteral("share"), p.sharePercent / 100.0},
+        });
+    }
+    return QVariantMap{
+        {QStringLiteral("answeringNodes"), r.answeringNodes},
+        {QStringLiteral("manyNodesAt"), dht::SybilReport::ManyNodesAt},
+        {QStringLiteral("denseSubnetAt"), dht::SybilReport::DenseSubnetAt},
+        {QStringLiteral("pointsToSelfAt"), dht::SybilReport::PointsToSelfAt},
+        {QStringLiteral("denseWindowChance"), dht::SybilReport::DenseWindowChance},
+        {QStringLiteral("shownAtMost"), dht::SybilReport::MaxListed},
+        {QStringLiteral("flaggedCount"), r.flaggedCount},
+        {QStringLiteral("manyNodesCount"), r.manyNodesCount},
+        {QStringLiteral("denseSubnetCount"), r.denseSubnetCount},
+        {QStringLiteral("sharedIdCount"), r.sharedIdCount},
+        {QStringLiteral("denseWindowCount"), r.denseWindowCount},
+        {QStringLiteral("selfPointerCount"), r.selfPointerCount},
+        {QStringLiteral("flagged"), flagged},
+        {QStringLiteral("manyNodes"), many},
+        {QStringLiteral("denseSubnets"), subnets},
+        {QStringLiteral("sharedIds"), shared},
+        {QStringLiteral("denseWindows"), windows},
+        {QStringLiteral("selfPointers"), self},
+    };
+}
+
+QVariantMap inboundMap(const dht::InboundSummary &s, int shownClients)
+{
+    QVariantList methods;
+    for (const auto &[name, count] : s.methods) {
+        methods.append(QVariantMap{
+            {QStringLiteral("name"), name},
+            {QStringLiteral("count"), count},
+            {QStringLiteral("share"), shareOf(double(count), double(s.queries))},
+        });
+    }
+    return QVariantMap{
+        {QStringLiteral("queries"), s.queries},
+        {QStringLiteral("addresses"), s.addresses},
+        {QStringLiteral("ipv4Addresses"), s.ipv4Addresses},
+        {QStringLiteral("ipv6Addresses"), s.ipv6Addresses},
+        {QStringLiteral("readOnlyAddresses"), s.readOnlyAddresses},
+        {QStringLiteral("readOnlyShare"), shareOf(s.readOnlyAddresses, s.addresses)},
+        {QStringLiteral("untrackedQueries"), s.untrackedQueries},
+        {QStringLiteral("trackedAtMost"), dht::InboundTally::MaxAddresses},
+        {QStringLiteral("clients"), talliesFor(s.clients, shownClients, s.addresses)},
+        {QStringLiteral("distinctClients"), int(s.clients.size())},
+        {QStringLiteral("methods"), methods},
+    };
 }
 
 } // namespace
@@ -518,6 +679,10 @@ void DhtController::buildNetworkStats()
     }
     out.insert(QStringLiteral("available"), bool(m_statsSet));
     m_networkStats = out;
+    m_suspicious = m_statsSet ? suspiciousMap(m_statsSet->suspicious) : QVariantMap{};
+    m_suspicious.insert(QStringLiteral("available"), bool(m_statsSet));
+    m_inbound = m_statsSet ? inboundMap(m_statsSet->inbound, ShownClients) : QVariantMap{};
+    m_inbound.insert(QStringLiteral("available"), bool(m_statsSet));
     emit networkStatsChanged();
 }
 
@@ -541,6 +706,47 @@ dht::NodeQuery::Sort sortFromName(const QString &name)
     return Sort::Address;
 }
 
+// Feature filters by name: flags that must be set, and that must be clear.
+std::pair<quint32, quint32> featureFlags(const QString &name)
+{
+    using F = dht::CatalogEntry;
+    static const QHash<QString, std::pair<quint32, quint32>> filters = {
+        {QStringLiteral("bep51-yes"), {F::Tested51 | F::Has51, 0}},
+        {QStringLiteral("bep51-no"), {F::Tested51, F::Has51}},
+        {QStringLiteral("bep44-yes"), {F::Tested44 | F::Has44, 0}},
+        {QStringLiteral("bep44-no"), {F::Tested44, F::Has44}},
+        {QStringLiteral("bep32-yes"), {F::Tested32 | F::Has32, 0}},
+        {QStringLiteral("bep32-no"), {F::Tested32, F::Has32}},
+        {QStringLiteral("ip-yes"), {F::TestedIp | F::SendsIp, 0}},
+        {QStringLiteral("ip-no"), {F::TestedIp, F::SendsIp}},
+        {QStringLiteral("unknown-204"), {F::TestedUnknown | F::Answers204, 0}},
+        {QStringLiteral("unknown-error"), {F::TestedUnknown | F::AnswersOther | F::AnswersError, 0}},
+        {QStringLiteral("unknown-reply"), {F::TestedUnknown | F::AnswersOther, F::AnswersError}},
+        {QStringLiteral("unknown-none"), {F::TestedUnknown, F::Answers204 | F::AnswersOther}},
+        {QStringLiteral("bogons"), {F::ListsBogons, 0}},
+    };
+    return filters.value(name, {0, 0});
+}
+
+quint8 suspicionFromName(const QString &name)
+{
+    if (name == QLatin1String("many"))
+        return dht::ManyNodes;
+    if (name == QLatin1String("subnet"))
+        return dht::DenseSubnet;
+    if (name == QLatin1String("sharedId"))
+        return dht::SharedId;
+    if (name == QLatin1String("denseIds"))
+        return dht::DenseIds;
+    if (name == QLatin1String("self"))
+        return dht::PointsToSelf;
+    if (name == QLatin1String("several"))
+        return dht::SeveralSignals;
+    if (name == QLatin1String("any"))
+        return dht::ManyNodes | dht::DenseSubnet | dht::SharedId | dht::DenseIds | dht::PointsToSelf;
+    return 0;
+}
+
 } // namespace
 
 void DhtController::resetNodeList()
@@ -558,6 +764,14 @@ void DhtController::resetNodeList()
         {QStringLiteral("error"), QString()},
     };
     emit nodeListChanged();
+}
+
+QString DhtController::validateIdPrefixFilter(const QString &text) const
+{
+    dht::NodeId prefix;
+    int bits = -1;
+    QString error;
+    return dht::parseIdPrefixFilter(text, &prefix, &bits, &error) ? QString() : error;
 }
 
 QString DhtController::validateAddressFilter(const QString &text) const
@@ -600,6 +814,8 @@ void DhtController::setNodeQuery(const QVariantMap &q)
     query.maxRttMs = q.value(QStringLiteral("maxRtt"), -1).toInt();
     query.port = quint16(std::clamp(q.value(QStringLiteral("port"), 0).toInt(), 0, 65535));
     query.minNodesAtAddress = std::max(0, q.value(QStringLiteral("minNodes"), 0).toInt());
+    std::tie(query.flagsSet, query.flagsClear) = featureFlags(q.value(QStringLiteral("feature")).toString());
+    query.suspicion = suspicionFromName(q.value(QStringLiteral("suspicion")).toString());
     query.sort = sortFromName(q.value(QStringLiteral("sort")).toString());
     query.descending = q.value(QStringLiteral("descending")).toBool();
     query.offset = std::max(0, q.value(QStringLiteral("offset"), 0).toInt());
@@ -608,6 +824,12 @@ void DhtController::setNodeQuery(const QVariantMap &q)
     QString error;
     if (!dht::parseAddressFilter(q.value(QStringLiteral("address")).toString(), &query.subnet, &query.subnetBits,
                                  &error)) {
+        m_nodeListInfo.insert(QStringLiteral("error"), error);
+        emit nodeListChanged();
+        return;
+    }
+    if (!dht::parseIdPrefixFilter(q.value(QStringLiteral("idPrefix")).toString(), &query.idPrefix,
+                                  &query.idPrefixBits, &error)) {
         m_nodeListInfo.insert(QStringLiteral("error"), error);
         emit nodeListChanged();
         return;
@@ -752,6 +974,8 @@ void DhtController::exportSummary(const QUrl &file)
             {QStringLiteral("ipv4"), statsMap(m_statsSet->ipv4, all, all, all)},
             {QStringLiteral("ipv6"), statsMap(m_statsSet->ipv6, all, all, all)},
         });
+        summary.insert(QStringLiteral("suspicious"), suspiciousMap(m_statsSet->suspicious));
+        summary.insert(QStringLiteral("queriesToUs"), inboundMap(m_statsSet->inbound, all));
     }
     const CrawlStatus &c = m_crawl;
     summary.insert(QStringLiteral("scan"), QVariantMap{
@@ -766,6 +990,7 @@ void DhtController::exportSummary(const QUrl &file)
         {QStringLiteral("answers"), c.answers},
         {QStringLiteral("errors"), c.errors},
         {QStringLiteral("timeouts"), c.timeouts},
+        {QStringLiteral("featureChecks"), c.featureQueries},
         {QStringLiteral("scanningSeconds"), c.monitoredSeconds},
         {QStringLiteral("nodeListCap"), c.cap},
     });

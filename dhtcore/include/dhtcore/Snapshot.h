@@ -143,6 +143,8 @@ struct CrawlSnapshot
     int outstanding = 0;  // asked, not yet answered or timed out
     int waiting = 0;      // queued to be asked
     int batch = 0;        // queries per tick the crawler currently allows itself
+    qint64 featureQueries = 0;  // feature checks sent (not in queries)
+    int featureWaiting = 0;     // answering nodes with feature checks left
     qint64 monitoredMs = 0;
 
     // Recomputed every few seconds while scanning; shared, not copied.

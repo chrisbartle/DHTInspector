@@ -183,6 +183,67 @@ ScrollView {
         }
     }
 
+    // Filters the node list at the bottom and scrolls to it.
+    function showNodes(filters) {
+        nodeListPanel.showGroup(filters)
+        const flick = page.contentItem
+        flick.contentY = Math.max(0, Math.min(nodeListPanel.y, flick.contentHeight - flick.height))
+    }
+
+    // A link that shows one group in the node list.
+    component ShowLink: Label {
+        id: link
+
+        property var filters: ({})
+        property string showLabel: qsTr("Show")
+
+        text: showLabel
+        color: linkHover.hovered ? Qt.lighter(Theme.accent, 1.25) : Theme.accent
+        font.pixelSize: Theme.fontSizeSmall
+        font.underline: linkHover.hovered
+
+        Accessible.role: Accessible.Link
+        Accessible.name: showLabel
+        Accessible.description: qsTr("Filter the node list to this group")
+        Accessible.onPressAction: if (link.enabled) page.showNodes(link.filters)
+
+        HoverHandler { id: linkHover; enabled: link.enabled; cursorShape: Qt.PointingHandCursor }
+        TapHandler { enabled: link.enabled; onTapped: page.showNodes(link.filters) }
+    }
+
+    // A share row with a link to the nodes behind it. `checked` is how many
+    // addresses the share is of, when that differs from the total.
+    component FeatureRow: RowLayout {
+        id: featureRow
+
+        property string label
+        property real count
+        property real share
+        property real checked: -1
+        property color tone: Theme.accent
+        property var filters: ({})
+        property string showLabel: qsTr("Show")
+        property bool showVisible: count > 0
+
+        Layout.fillWidth: true
+        spacing: Theme.spacing
+
+        ShareRow {
+            label: featureRow.checked >= 0 ? qsTr("%1 (of %2)").arg(featureRow.label).arg(page.count(featureRow.checked))
+                                           : featureRow.label
+            count: featureRow.count
+            share: featureRow.share
+            tone: featureRow.tone
+        }
+        ShowLink {
+            Layout.preferredWidth: 110
+            opacity: featureRow.showVisible ? 1 : 0
+            enabled: featureRow.showVisible
+            filters: featureRow.filters
+            showLabel: featureRow.showLabel
+        }
+    }
+
     // Shows the controller's real state; a flip is a request, so a refused
     // one snaps back. Reacts to checkedChanged so assistive tools work too.
     component ControlledSwitch: ThemedSwitch {
@@ -934,16 +995,425 @@ ScrollView {
                 }
             }
 
+            // Optional features ----------------------------------------------
             Panel {
+                id: featuresPanel
+
+                readonly property var f: page.stats.features || null
+                readonly property var unknown: f ? f.unknown : { tested: 0, error204: 0, otherError: 0, reply: 0, silent: 0 }
+
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignTop
                 title: qsTr("Optional Features")
-                subtitle: qsTr("Support for BEP 32 (IPv6 node lists), BEP 44 (stored items) and BEP 51 (infohash sampling).")
-                EmptyState { message: qsTr("Not measured yet") }
+                subtitle: qsTr("Checked on every answering node with one extra query at a time: sample_infohashes (BEP 51), then get (BEP 44), then a query no DHT defines. Shares are of the addresses checked so far.")
+
+                Repeater {
+                    model: featuresPanel.f ? [
+                        { key: "bep51", label: qsTr("BEP 51 infohash sampling"), filter: "bep51-yes" },
+                        { key: "bep44", label: qsTr("BEP 44 stored items"), filter: "bep44-yes" },
+                        { key: "bep32", label: qsTr("BEP 32 lists both families"), filter: "bep32-yes" },
+                        { key: "sendsIp", label: qsTr("BEP 42 ip field in replies"), filter: "ip-yes" }
+                    ] : []
+
+                    delegate: FeatureRow {
+                        required property var modelData
+                        readonly property var t: featuresPanel.f[modelData.key]
+                        label: modelData.label
+                        count: t.yes
+                        share: Math.max(0, t.share)
+                        checked: t.tested
+                        filters: ({ feature: modelData.filter, states: ["responsive"] })
+                    }
+                }
+
+                FieldLabel {
+                    visible: featuresPanel.f !== null
+                    Layout.topMargin: Theme.spacingSmall
+                    text: qsTr("Unknown query")
+                }
+                Repeater {
+                    model: featuresPanel.f ? [
+                        { key: "error204", label: qsTr("Error 204, as BEP 5 asks"), filter: "unknown-204", tone: Theme.good },
+                        { key: "otherError", label: qsTr("Another error code (libtorrent sends 203)"), filter: "unknown-error", tone: Theme.accent },
+                        { key: "reply", label: qsTr("A normal reply"), filter: "unknown-reply", tone: Theme.warn },
+                        { key: "silent", label: qsTr("No answer"), filter: "unknown-none", tone: Theme.textDim }
+                    ] : []
+
+                    delegate: FeatureRow {
+                        required property var modelData
+                        label: modelData.label
+                        count: featuresPanel.unknown[modelData.key]
+                        share: featuresPanel.unknown.tested > 0 ? featuresPanel.unknown[modelData.key] / featuresPanel.unknown.tested : 0
+                        checked: featuresPanel.unknown.tested
+                        tone: modelData.tone
+                        filters: ({ feature: modelData.filter, states: ["responsive"] })
+                    }
+                }
+
+                Hint {
+                    visible: featuresPanel.f !== null
+                    text: qsTr("%1 checks sent; %2 answering nodes still have checks to go.%3")
+                          .arg(page.count(page.crawl.featureQueries))
+                          .arg(page.count(page.crawl.featureWaiting))
+                          .arg(featuresPanel.f && featuresPanel.f.bep51SamplesMedian >= 0
+                               ? " " + qsTr("BEP 51 nodes store a median of %1 infohashes.").arg(page.count(featuresPanel.f.bep51SamplesMedian))
+                               : "")
+                }
+
+                EmptyState {
+                    visible: featuresPanel.f === null
+                    message: qsTr("Not measured yet")
+                }
+            }
+
+            // Bad addresses ----------------------------------------------------
+            Panel {
+                id: badPanel
+
+                readonly property var bad: page.stats.badAddresses || { unreachable: 0, unclassified: 0, byProblem: [] }
+                readonly property var bogons: page.stats.features ? page.stats.features.listsBogons : { tested: 0, yes: 0, share: -1 }
+
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignTop
+                title: qsTr("Bad Addresses")
+                subtitle: qsTr("Addresses nodes listed that cannot be contacted, which the scan never queries. Nodes behind NAT often pass on private addresses; junk like documentation ranges or port 0 points at broken or hostile software.")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    columns: 2
+                    columnSpacing: Theme.spacingLarge
+
+                    StatTile {
+                        label: qsTr("Unreachable addresses")
+                        value: page.count(badPanel.bad.unreachable)
+                        detail: page.share(badPanel.bad.unreachable, badPanel.bad.unreachable + page.totals.heardIps) + " " + qsTr("of all listed")
+                    }
+                    StatTile {
+                        label: qsTr("Nodes listing them")
+                        value: page.count(badPanel.bogons.yes)
+                        detail: badPanel.bogons.tested > 0 ? qsTr("%1 of answering addresses").arg(page.percent(badPanel.bogons.share)) : ""
+                        tone: badPanel.bogons.share > 0.05 ? Theme.warn : Theme.text
+                    }
+                }
+
+                Repeater {
+                    model: badPanel.bad.byProblem
+
+                    delegate: FeatureRow {
+                        required property var modelData
+                        label: modelData.name
+                        count: modelData.count
+                        share: badPanel.bad.unreachable > 0 ? modelData.count / badPanel.bad.unreachable : 0
+                        tone: Theme.textDim
+                        filters: ({ states: ["unreachable"] })
+                        showLabel: qsTr("Show unreachable")
+                        // Port 0 on an otherwise good address is not in the unreachable list.
+                        showVisible: modelData.count > 0 && index !== 0
+                        required property int index
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    visible: badPanel.bogons.yes > 0
+                    Hint { text: qsTr("Nodes that listed at least one unreachable address:") }
+                    ShowLink { filters: ({ feature: "bogons", states: ["responsive"] }) }
+                }
+            }
+
+            // Queries to us ----------------------------------------------------
+            Panel {
+                id: inboundPanel
+
+                readonly property var q: DhtController.inbound
+                readonly property bool available: q.available === true && q.queries !== undefined
+
+                Layout.fillWidth: true
+                Layout.columnSpan: parent.columns
+                title: qsTr("Queries to Us")
+                subtitle: qsTr("Nodes that sent this node a query, counted by address. Read-only nodes (BEP 43) never answer and are never listed by others, so this is the only place they show up. It depends on how well known this node is, so it grows the longer the engine runs.")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    visible: inboundPanel.available
+                    columns: page.availableWidth > 700 ? 4 : 2
+                    columnSpacing: Theme.spacingLarge
+
+                    StatTile { label: qsTr("Queries received"); value: page.count(inboundPanel.q.queries || 0) }
+                    StatTile {
+                        label: qsTr("Addresses")
+                        value: page.count(inboundPanel.q.addresses || 0)
+                        detail: DhtController.ipv6Enabled ? qsTr("%1 IPv4, %2 IPv6").arg(page.count(inboundPanel.q.ipv4Addresses || 0))
+                                                                                 .arg(page.count(inboundPanel.q.ipv6Addresses || 0)) : ""
+                    }
+                    StatTile {
+                        label: qsTr("Read-only addresses")
+                        value: page.count(inboundPanel.q.readOnlyAddresses || 0)
+                        detail: page.percent(inboundPanel.q.readOnlyShare || 0)
+                        tone: Theme.accent
+                    }
+                    StatTile {
+                        label: qsTr("Beyond tracking")
+                        value: page.count(inboundPanel.q.untrackedQueries || 0)
+                        detail: qsTr("queries once %1 addresses are known").arg(page.count(inboundPanel.q.trackedAtMost || 0))
+                    }
+                }
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    visible: inboundPanel.available && (inboundPanel.q.queries || 0) > 0
+                    columns: page.availableWidth > 1100 ? 2 : 1
+                    columnSpacing: Theme.spacingLarge
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignTop
+                        FieldLabel { text: qsTr("By method") }
+                        Repeater {
+                            model: inboundPanel.q.methods || []
+                            delegate: ShareRow {
+                                required property var modelData
+                                label: modelData.name
+                                count: modelData.count
+                                share: modelData.share
+                            }
+                        }
+                    }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignTop
+                        FieldLabel {
+                            Layout.preferredWidth: -1
+                            text: qsTr("By client (%1 distinct)").arg(page.count(inboundPanel.q.distinctClients || 0))
+                        }
+                        Repeater {
+                            model: inboundPanel.q.clients || []
+                            delegate: ShareRow {
+                                required property var modelData
+                                label: modelData.name
+                                count: modelData.count
+                                share: modelData.share
+                                tone: modelData.kind === "known" ? Theme.accent
+                                      : modelData.kind === "absent" || modelData.kind === "other" ? Theme.textDim
+                                      : Theme.warn
+                            }
+                        }
+                    }
+                }
+
+                EmptyState {
+                    visible: !inboundPanel.available || (inboundPanel.q.queries || 0) === 0
+                    message: !inboundPanel.available ? qsTr("Appears once the scan has run") : qsTr("No queries received yet")
+                }
+            }
+
+            // Suspicious groups ------------------------------------------------
+            Panel {
+                id: suspectPanel
+
+                readonly property var s: DhtController.suspicious
+                readonly property bool available: s.available === true && s.answeringNodes !== undefined
+                property string view: "flagged"
+
+                Layout.fillWidth: true
+                Layout.columnSpan: parent.columns
+                title: qsTr("Suspicious Groups")
+                subtitle: qsTr("Patterns that can mean one party runs many nodes to crowd a part of the network (a Sybil attack). Each also has innocent causes, such as shared hosting, carrier-grade NAT or seedboxes, so treat them as leads to examine, not verdicts. Addresses showing two or more signals are the ones most worth a look.")
+
+                GridLayout {
+                    Layout.fillWidth: true
+                    visible: suspectPanel.available
+                    columns: page.availableWidth > 1100 ? 6 : page.availableWidth > 700 ? 3 : 2
+                    columnSpacing: Theme.spacingLarge
+                    rowSpacing: Theme.spacing
+
+                    Repeater {
+                        model: [
+                            { view: "flagged", filter: "several", label: qsTr("Two or more signals"), count: "flaggedCount", unit: qsTr("addresses"),
+                              detail: qsTr("any of the signals below") },
+                            { view: "many", filter: "many", label: qsTr("Many nodes"), count: "manyNodesCount", unit: qsTr("addresses"),
+                              detail: qsTr("%1 or more answering nodes").arg(suspectPanel.s.manyNodesAt || 0) },
+                            { view: "subnets", filter: "subnet", label: qsTr("Dense subnets"), count: "denseSubnetCount", unit: qsTr("subnets"),
+                              detail: qsTr("%1 or more addresses in a /24 or /48").arg(suspectPanel.s.denseSubnetAt || 0) },
+                            { view: "shared", filter: "sharedId", label: qsTr("Shared IDs"), count: "sharedIdCount", unit: qsTr("IDs"),
+                              detail: qsTr("one ID on several addresses") },
+                            { view: "windows", filter: "denseIds", label: qsTr("Dense ID ranges"), count: "denseWindowCount", unit: qsTr("ranges"),
+                              detail: qsTr("more IDs than chance allows") },
+                            { view: "self", filter: "self", label: qsTr("Points to itself"), count: "selfPointerCount", unit: qsTr("nodes"),
+                              detail: qsTr("%1%+ of listed nodes in its own subnet").arg(suspectPanel.s.pointsToSelfAt || 0) }
+                        ]
+
+                        delegate: Rectangle {
+                            id: signalTile
+
+                            required property var modelData
+                            readonly property int n: suspectPanel.s[modelData.count] || 0
+                            readonly property bool selected: suspectPanel.view === modelData.view
+
+                            Layout.fillWidth: true
+                            implicitHeight: tileColumn.implicitHeight + 2 * Theme.spacingSmall
+                            radius: Theme.radius
+                            color: selected ? Theme.surfaceAlt : "transparent"
+                            border.width: 1
+                            border.color: selected ? Theme.accent : Theme.border
+
+                            TapHandler { onTapped: suspectPanel.view = signalTile.modelData.view }
+                            HoverHandler { cursorShape: Qt.PointingHandCursor }
+
+                            ColumnLayout {
+                                id: tileColumn
+                                anchors.fill: parent
+                                anchors.margins: Theme.spacingSmall
+                                spacing: 2
+
+                                Label {
+                                    text: signalTile.modelData.label
+                                    color: Theme.textDim
+                                    font.pixelSize: Theme.fontSizeSmall
+                                    Accessible.role: Accessible.Button
+                                    Accessible.name: qsTr("List %1: %2 %3").arg(signalTile.modelData.label)
+                                                     .arg(signalTile.n).arg(signalTile.modelData.unit)
+                                    Accessible.onPressAction: suspectPanel.view = signalTile.modelData.view
+                                }
+                                Label {
+                                    text: page.count(signalTile.n)
+                                    color: signalTile.n > 0 ? Theme.warn : Theme.text
+                                    font.family: Theme.monoFamily
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: signalTile.modelData.detail
+                                    color: Theme.textFaint
+                                    font.pixelSize: Theme.fontSizeSmall - 1
+                                    wrapMode: Text.WordWrap
+                                }
+                                ShowLink {
+                                    visible: signalTile.n > 0
+                                    showLabel: qsTr("Show all")
+                                    filters: ({ suspicion: signalTile.modelData.filter })
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Hint {
+                    visible: suspectPanel.available
+                    text: qsTr("Over %1 answering nodes. Lists show at most %2 entries each, the strongest first; \"Show\" filters the node list below.")
+                          .arg(page.count(suspectPanel.s.answeringNodes || 0)).arg(suspectPanel.s.shownAtMost || 0)
+                }
+
+                // The selected list.
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: suspectPanel.available
+                    spacing: 0
+
+                    readonly property var rows: {
+                        const s = suspectPanel.s
+                        switch (suspectPanel.view) {
+                        case "flagged": return s.flagged || []
+                        case "many": return s.manyNodes || []
+                        case "subnets": return s.denseSubnets || []
+                        case "shared": return s.sharedIds || []
+                        case "windows": return s.denseWindows || []
+                        case "self": return s.selfPointers || []
+                        }
+                        return []
+                    }
+
+                    Repeater {
+                        model: parent.rows
+
+                        delegate: RowLayout {
+                            id: groupRow
+
+                            required property var modelData
+                            required property int index
+
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 26
+                            spacing: Theme.spacing
+
+                            Label {
+                                Layout.preferredWidth: 330
+                                elide: Text.ElideMiddle
+                                font.family: Theme.monoFamily
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.text
+                                visible: suspectPanel.view !== "self"
+                                text: {
+                                    const r = groupRow.modelData
+                                    switch (suspectPanel.view) {
+                                    case "subnets": return r.subnet
+                                    case "shared": return r.id
+                                    case "windows": return r.prefix
+                                    default: return r.address
+                                    }
+                                }
+                            }
+                            AddressLink {
+                                Layout.preferredWidth: 330
+                                visible: suspectPanel.view === "self"
+                                address: suspectPanel.view === "self" ? groupRow.modelData.address : ""
+                                elide: Text.ElideMiddle
+                            }
+                            Label {
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                font.pixelSize: Theme.fontSizeSmall
+                                color: Theme.textDim
+                                text: {
+                                    const r = groupRow.modelData
+                                    switch (suspectPanel.view) {
+                                    case "flagged":
+                                    case "many":
+                                        return qsTr("%1 answering nodes, %2 BEP 42 compliant, %3 ID prefixes · %4")
+                                               .arg(r.nodes).arg(r.compliant).arg(r.prefixes).arg(r.signalText)
+                                    case "subnets":
+                                        return qsTr("%1 answering addresses, %2 nodes").arg(r.addresses).arg(r.nodes)
+                                    case "shared":
+                                        return qsTr("on %1 addresses: %2").arg(r.addresses).arg(r.sample)
+                                    case "windows":
+                                        return qsTr("%1 nodes where %2 would be expected, on %3 addresses; chance %4")
+                                               .arg(r.nodes).arg(r.expected.toFixed(r.expected < 10 ? 2 : 0))
+                                               .arg(r.addresses).arg(r.chance < 1e-6 ? "< 1e-6" : r.chance.toExponential(1))
+                                    case "self":
+                                        return qsTr("%1 of the nodes it lists are in its own subnet").arg(page.percent(r.share))
+                                    }
+                                    return ""
+                                }
+                            }
+                            ShowLink {
+                                filters: {
+                                    const r = groupRow.modelData
+                                    switch (suspectPanel.view) {
+                                    case "subnets": return { address: r.subnet }
+                                    case "shared": return { idPrefix: r.id }
+                                    case "windows": return { idPrefix: r.prefix }
+                                    case "self": return { address: r.address.replace(/:\d+$/, "").replace(/^\[|\]$/g, "") }
+                                    default: return { address: r.address }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    EmptyState {
+                        visible: parent.rows.length === 0
+                        message: qsTr("Nothing found")
+                    }
+                }
+
+                EmptyState {
+                    visible: !suspectPanel.available
+                    message: qsTr("Appears once the scan has run")
+                }
             }
         }
 
         NodeListPanel {
+            id: nodeListPanel
             Layout.fillWidth: true
             active: page.visible
         }
