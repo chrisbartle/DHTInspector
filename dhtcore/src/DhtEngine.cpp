@@ -101,6 +101,12 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
     m_crawler = new Crawler(&m_catalog, crawl, this);
     m_crawler->setNodes(m_v4, m_v6);
 
+    CensusConfig census = config.census;
+    census.allowLocalAddresses = config.allowLocalAddresses;
+    m_census = new Census(&m_catalog, census, this);
+    m_census->setNodes(m_v4, m_v6);
+    connect(m_census, &Census::finished, this, &DhtEngine::scheduleSnapshot);
+
     m_mapper = new PortMapper(this);
     connect(m_mapper, &PortMapper::changed, this, &DhtEngine::scheduleSnapshot);
     if (config.portForwarding)
@@ -129,7 +135,9 @@ void DhtEngine::shutdown()
         delete m_mapper;
         m_mapper = nullptr;
     }
-    // The crawler goes before the nodes it sends through.
+    // The scan and the count go before the nodes they send through.
+    delete m_census;
+    m_census = nullptr;
     delete m_crawler;
     m_crawler = nullptr;
     m_catalog.clear();
@@ -230,6 +238,22 @@ void DhtEngine::setMonitoring(bool on)
     if (!m_crawler)
         return;
     m_crawler->setMonitoring(on);
+    scheduleSnapshot();
+}
+
+void DhtEngine::startCensus()
+{
+    if (!m_census)
+        return;
+    const CrawlSnapshot crawl = m_crawler ? m_crawler->snapshot() : CrawlSnapshot{};
+    m_census->start(crawl.sizeV4.median, crawl.sizeV6.median);
+    scheduleSnapshot();
+}
+
+void DhtEngine::cancelCensus()
+{
+    if (m_census)
+        m_census->cancel();
     scheduleSnapshot();
 }
 
@@ -640,6 +664,8 @@ EngineSnapshot DhtEngine::snapshot() const
         s.portMapping = m_mapper->snapshot();
     if (m_crawler)
         s.crawl = m_crawler->snapshot();
+    if (m_census)
+        s.census = m_census->snapshot();
 
     s.stats.storedInfohashes = m_storage.infohashCount();
     s.stats.storedPeers = m_storage.peerCount();

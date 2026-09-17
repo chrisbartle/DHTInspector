@@ -20,7 +20,7 @@ Two jobs, one tool:
 | Setup tab | Working |
 | Search tab | Working: peer and item lookups, announce, BEP 44 publishing |
 | Data Store tab | Working: announced peers with addresses and expiry |
-| Global Health tab | In progress: network scan (Monitoring) with node counts; statistics and node list to come |
+| Global Health tab | In progress: network scan, address counts, quick and precise size, client/round-trip/BEP 42/port statistics; node list and feature checks to come |
 | Probe Node tab | Working: one node, any query, replies decoded in full |
 
 ### What the engine does
@@ -60,6 +60,28 @@ Two jobs, one tool:
   bytes each, capped at 2 million by default (adjustable while running);
   when full, a sampled choice of the longest-silent nodes makes way.
   Switching monitoring off pauses the scan; stopping the engine discards it.
+- Everything on Global Health is counted by IP address, never by node ID:
+  IDs can be changed at will and one address can run many nodes. Headline
+  counts are addresses heard about, addresses that have answered
+  (connected), and addresses answering now, alongside per-node detail.
+- Network statistics over the answering addresses, for IPv4, IPv6 or both:
+  clients by name and by version (decoded as on the Probe tab), BEP 42
+  compliance, round-trip median/90th/99th percentile with a histogram, and
+  port distribution. An address running several nodes counts once, split
+  evenly between them. Recomputed every few seconds, less often if a pass
+  gets expensive.
+- Quick size estimate: random-ID lookups run alongside the scan, and the
+  spread of the eight closest nodes estimates the number of nodes; divided
+  by the nodes per answering address seen so far, it gives a rough count
+  of addresses. Lookups miss some nearby nodes, so it reads low.
+- Precise count (a button, with or without monitoring): takes random
+  slices of the ID space, a few thousand nodes each, and keeps asking the
+  nodes inside with different targets until two rounds turn up nothing
+  new. Addresses heard about and addresses that answered are scaled up by
+  the slice's share of the ID space, each weighted by its chance of landing
+  in a slice given how many nodes it runs (Horvitz-Thompson), so busy hosts
+  are not multiplied. Eight slices per family give a mean and a 95%
+  interval.
 - BEP 43 read-only mode, off by default and switchable while running: every
   query we send carries `ro`, and every query we receive is dropped without a
   reply, so the store gains nothing while it is on. Our own lookups still work.

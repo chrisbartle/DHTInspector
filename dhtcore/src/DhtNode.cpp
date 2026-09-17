@@ -98,6 +98,11 @@ quint16 DhtNode::port() const
     return m_socket ? m_socket->localPort() : 0;
 }
 
+QHostAddress DhtNode::localAddress() const
+{
+    return m_socket ? m_socket->localAddress() : QHostAddress();
+}
+
 void DhtNode::setReadOnly(bool readOnly)
 {
     if (m_config.readOnly == readOnly)

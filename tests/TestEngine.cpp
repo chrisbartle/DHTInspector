@@ -105,17 +105,31 @@ EngineConfig monitorConfig()
     return config;
 }
 
+Endpoint endpointOf(const DhtEngine &engine)
+{
+    return Endpoint(engine.node(Family::IPv4)->localAddress(), portOf(engine));
+}
+
+void introduce(DhtEngine &engine, const DhtEngine &to)
+{
+    const Endpoint e = endpointOf(to);
+    engine.addNode(e.address.toString(), e.port);
+}
+
 // A chain of engines, each introduced only to the one before it, so a
-// scan has to follow replies to find them all.
-std::vector<std::unique_ptr<DhtEngine>> startChain(int count)
+// scan has to follow replies to find them all. Each has its own loopback
+// address (127.0.0.firstHost and up), since the scan counts addresses.
+std::vector<std::unique_ptr<DhtEngine>> startChain(int count, int firstHost = 10)
 {
     std::vector<std::unique_ptr<DhtEngine>> chain;
     for (int i = 0; i < count; ++i) {
-        chain.push_back(startEngine());
+        EngineConfig config = loopbackConfig();
+        config.bindAddressV4 = QHostAddress(QStringLiteral("127.0.0.%1").arg(firstHost + i));
+        chain.push_back(startEngineWith(config));
         if (!chain.back())
             return {};
         if (i > 0)
-            chain.back()->addNode(QStringLiteral("127.0.0.1"), portOf(*chain[i - 1]));
+            introduce(*chain.back(), *chain[i - 1]);
     }
     return chain;
 }
@@ -166,6 +180,8 @@ private slots:
     void monitoringMarksSilentAndGoneNodes();
     void monitoringPausesAndHonoursTheCap();
     void monitoringDoesNotQueueBehindABusyHost();
+    void censusCountsAddressesExactly();
+    void censusChoosesSlicesAndCancels();
 };
 
 void TestEngine::swarmConvergesAndSharesPeers()
@@ -1114,7 +1130,7 @@ void TestEngine::monitoringDiscoversTheWholeSwarm()
 
     auto monitor = startEngineWith(monitorConfig());
     QVERIFY(monitor);
-    monitor->addNode(QStringLiteral("127.0.0.1"), portOf(*chain.back()));
+    introduce(*monitor, *chain.back());
     QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*monitor) >= 1, 5000);
 
     QCOMPARE(monitor->snapshot().crawl.phase, CrawlSnapshot::Phase::Off);
@@ -1145,6 +1161,30 @@ void TestEngine::monitoringDiscoversTheWholeSwarm()
     QCOMPARE(crawl.notSent, qint64(0));
     QVERIFY(crawl.phase != CrawlSnapshot::Phase::Off);
     QVERIFY(crawl.memoryBytes > 0);
+
+    // Statistics catch up within a few seconds.
+    QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.stats && monitor->snapshot().crawl.stats->all.answeringIps == N,
+                             10000);
+    const auto stats = monitor->snapshot().crawl.stats;
+    QCOMPARE(stats->ipv4.answeringIps, N);
+    QCOMPARE(stats->ipv4.connectedIps, N);
+    QVERIFY(stats->ipv4.heardIps >= N);
+    QCOMPARE(stats->ipv4.answeringNodes, N);
+    QCOMPARE(stats->ipv4.multiNodeIps, 0);
+    QCOMPARE(stats->ipv6.answeringIps, 0);
+    QCOMPARE(int(stats->all.clients.size()), 1);
+    QCOMPARE(stats->all.clients[0].name, QStringLiteral("DHT Inspector"));
+    QCOMPARE(stats->all.clients[0].count, double(N));
+    QCOMPARE(stats->all.versions[0].version, QStringLiteral("0.1"));
+    QCOMPARE(stats->all.bep42[int(bep42::Status::Exempt)], double(N));
+    QCOMPARE(stats->all.rttWeight, double(N));
+    QVERIFY(stats->all.rttMedianMs >= 0);
+    QCOMPARE(stats->all.distinctPorts, N);
+
+    // And lookups for random IDs start producing size estimates.
+    QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.sizeV4.samples > 0, 15000);
+    QVERIFY(monitor->snapshot().crawl.sizeV4.median > 0);
+    QCOMPARE(monitor->snapshot().crawl.sizeV6.samples, 0);
 }
 
 void TestEngine::monitoringMarksSilentAndGoneNodes()
@@ -1177,7 +1217,7 @@ void TestEngine::monitoringMarksSilentAndGoneNodes()
 
     auto monitor = startEngineWith(monitorConfig());
     QVERIFY(monitor);
-    monitor->addNode(QStringLiteral("127.0.0.1"), portOf(*chain.back()));
+    introduce(*monitor, *chain.back());
     monitor->addNode(QStringLiteral("127.0.0.1"), lister.localPort());
     QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*monitor) >= 2, 5000);
 
@@ -1192,13 +1232,13 @@ void TestEngine::monitoringMarksSilentAndGoneNodes()
 
     // Two nodes stop. Once rechecked without an answer they are gone rather
     // than silent, because they answered before.
-    const quint16 stoppedA = portOf(*chain[1]);
-    const quint16 stoppedB = portOf(*chain[3]);
+    const Endpoint stoppedA = endpointOf(*chain[1]);
+    const Endpoint stoppedB = endpointOf(*chain[3]);
     chain[1].reset();
     chain[3].reset();
     QTRY_COMPARE_WITH_TIMEOUT(catalogCount(*monitor, CatalogEntry::State::Gone), 2, 15000);
-    for (quint16 port : {stoppedA, stoppedB}) {
-        const auto slot = monitor->catalog().find(Endpoint(QHostAddress(QHostAddress::LocalHost), port));
+    for (const Endpoint &stopped : {stoppedA, stoppedB}) {
+        const auto slot = monitor->catalog().find(stopped);
         QVERIFY(slot != NodeCatalog::NoSlot);
         QCOMPARE(monitor->catalog().at(slot).state, CatalogEntry::State::Gone);
     }
@@ -1216,7 +1256,7 @@ void TestEngine::monitoringPausesAndHonoursTheCap()
     config.catalogCap = 4;
     auto monitor = startEngineWith(config);
     QVERIFY(monitor);
-    monitor->addNode(QStringLiteral("127.0.0.1"), portOf(*chain.back()));
+    introduce(*monitor, *chain.back());
     QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*monitor) >= 1, 5000);
 
     // Never more than the cap, however much it hears of.
@@ -1289,8 +1329,10 @@ void TestEngine::monitoringDoesNotQueueBehindABusyHost()
     }
 
     // The real per-host limit this time: two a second for the one address.
+    // Size-estimating lookups would share that allowance, so they are off.
     EngineConfig config = monitorConfig();
     config.hostLimit = HostLimit{};
+    config.crawl.sizeEstimateIntervalMs = 0;
     auto monitor = startEngineWith(config);
     QVERIFY(monitor);
     monitor->addNode(QStringLiteral("127.0.0.1"), nodes[0]->localPort());
@@ -1316,6 +1358,149 @@ void TestEngine::monitoringDoesNotQueueBehindABusyHost()
     QTest::qWait(1200);
     QVERIFY2(monitor->node(Family::IPv4)->rpcQueued() <= Lookup::Alpha,
              qPrintable(QString::number(monitor->node(Family::IPv4)->rpcQueued())));
+}
+
+namespace {
+
+// A node that answers every query, listing whatever it is given.
+struct Lister
+{
+    QUdpSocket socket;
+    NodeId id = NodeId::random();
+    std::vector<krpc::CompactNode> lists;
+
+    bool start(QObject *context, const QHostAddress &address)
+    {
+        if (!socket.bind(address, 0))
+            return false;
+        QObject::connect(&socket, &QUdpSocket::readyRead, context, [this] {
+            while (socket.hasPendingDatagrams()) {
+                const QNetworkDatagram d = socket.receiveDatagram();
+                const auto parsed = krpc::parse(d.data());
+                if (!parsed.message || parsed.message->type != krpc::MessageType::Query)
+                    continue;
+                BValue::Dict values;
+                values.emplace("id", BValue(id.toBytes()));
+                values.emplace("nodes", BValue(krpc::encodeNodes(lists, Family::IPv4)));
+                socket.writeDatagram(krpc::encodeResponse(parsed.message->transactionId, values, {}, Endpoint()),
+                                     d.senderAddress(), quint16(d.senderPort()));
+            }
+        });
+        return true;
+    }
+
+    Endpoint endpoint() const { return Endpoint(socket.localAddress(), socket.localPort()); }
+};
+
+EngineConfig counterConfig()
+{
+    EngineConfig config = loopbackConfig();
+    config.census.slices = 2;
+    config.census.sliceBits = 0;  // the whole ID space: the count is exact
+    config.census.queryTimeoutMs = 400;
+    config.crawl.sizeEstimateIntervalMs = 0;
+    return config;
+}
+
+} // namespace
+
+// With the slice covering the whole ID space, the count is exact: every
+// address heard of, and every address that answered, counted once however
+// many nodes it runs.
+void TestEngine::censusCountsAddressesExactly()
+{
+    constexpr int N = 10;
+    auto chain = startChain(N, 30);
+    QCOMPARE(int(chain.size()), N);
+
+    // Two nodes sharing one address.
+    std::vector<std::unique_ptr<DhtEngine>> shared;
+    for (int i = 0; i < 2; ++i) {
+        EngineConfig config = loopbackConfig();
+        config.bindAddressV4 = QHostAddress(QStringLiteral("127.0.0.50"));
+        shared.push_back(startEngineWith(config));
+        QVERIFY(shared.back());
+        introduce(*shared.back(), *chain[i]);
+    }
+    introduce(*chain[5], *shared[0]);
+    introduce(*chain[6], *shared[1]);
+
+    // A node that answers, listing one that never does.
+    QUdpSocket dead;
+    QVERIFY(dead.bind(QHostAddress(QStringLiteral("127.0.0.61")), 0));
+    Lister lister;
+    QVERIFY(lister.start(this, QHostAddress(QStringLiteral("127.0.0.60"))));
+    lister.lists = {{NodeId::random(), Endpoint(dead.localAddress(), dead.localPort())},
+                    {shared[0]->node(Family::IPv4)->id(), endpointOf(*shared[0])},
+                    {shared[1]->node(Family::IPv4)->id(), endpointOf(*shared[1])}};
+
+    auto counter = startEngineWith(counterConfig());
+    QVERIFY(counter);
+    introduce(*counter, *chain.back());
+    counter->addNode(QStringLiteral("127.0.0.60"), lister.endpoint().port);
+    QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*counter) >= 2, 5000);
+
+    QCOMPARE(counter->snapshot().census.state, CensusSnapshot::State::Idle);
+    counter->startCensus();
+    QVERIFY(counter->isCensusRunning());
+    QCOMPARE(counter->snapshot().census.slicesTotal, 2);
+    QTRY_COMPARE_WITH_TIMEOUT(counter->snapshot().census.state, CensusSnapshot::State::Done, 60000);
+
+    const CensusSnapshot census = counter->snapshot().census;
+    QCOMPARE(census.slicesDone, 2);
+    QCOMPARE(int(census.slices.size()), 2);
+    for (const CensusSlice &slice : census.slices) {
+        QCOMPARE(slice.bits, 0);
+        // N chain addresses, the shared one, the lister: all answered.
+        QCOMPARE(slice.ipsAnswered, N + 2);
+        QCOMPARE(slice.ipsHeard, N + 3);  // and the one that never answers
+        QVERIFY(slice.nodesAnswered >= N + 3);  // both shared nodes are found
+        QCOMPARE(slice.heardEstimate, double(N + 3));
+        QCOMPARE(slice.connectedEstimate, double(N + 2));
+        QVERIFY(slice.rounds >= 3);  // at least two quiet rounds after the first
+        QVERIFY(slice.queries > 0);
+    }
+    QCOMPARE(census.ipv4.slices, 2);
+    QCOMPARE(census.ipv4.heard, double(N + 3));
+    QCOMPARE(census.ipv4.heardLow, double(N + 3));
+    QCOMPARE(census.ipv4.heardHigh, double(N + 3));
+    QCOMPARE(census.ipv4.connected, double(N + 2));
+    QCOMPARE(census.ipv6.slices, 0);
+    QVERIFY(census.queries > 0);
+    QVERIFY(!counter->isCensusRunning());
+}
+
+// Slice width follows the size estimate; cancelling stops the count.
+void TestEngine::censusChoosesSlicesAndCancels()
+{
+    auto chain = startChain(4, 70);
+    QCOMPARE(int(chain.size()), 4);
+
+    EngineConfig config = counterConfig();
+    config.census.sliceBits = -1;
+    config.census.slices = 50;
+    auto counter = startEngineWith(config);
+    QVERIFY(counter);
+    introduce(*counter, *chain.back());
+    QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*counter) >= 1, 5000);
+
+    // No size estimate yet: the default width.
+    counter->startCensus();
+    QVERIFY(counter->isCensusRunning());
+    QCOMPARE(counter->snapshot().census.bits, config.census.defaultSliceBits);
+    QCOMPARE(counter->snapshot().census.slicesTotal, 50);
+
+    counter->cancelCensus();
+    QVERIFY(!counter->isCensusRunning());
+    CensusSnapshot census = counter->snapshot().census;
+    QCOMPARE(census.state, CensusSnapshot::State::Cancelled);
+    const qint64 queries = census.queries;
+    QTest::qWait(1000);
+    QCOMPARE(counter->snapshot().census.queries, queries);
+
+    // Shutting down discards it.
+    counter->shutdown();
+    QCOMPARE(counter->snapshot().census.state, CensusSnapshot::State::Idle);
 }
 
 #include "TestEngine.moc"

@@ -44,6 +44,10 @@ class DhtController : public QObject
     Q_PROPERTY(bool monitoring READ monitoring WRITE setMonitoring NOTIFY monitoringChanged)
     Q_PROPERTY(int catalogCap READ catalogCap WRITE setCatalogCap NOTIFY catalogCapChanged)
     Q_PROPERTY(CrawlStatus crawl READ crawl NOTIFY snapshotChanged)
+    Q_PROPERTY(QString statsFamily READ statsFamily WRITE setStatsFamily NOTIFY statsFamilyChanged)
+    Q_PROPERTY(QVariantMap networkStats READ networkStats NOTIFY networkStatsChanged)
+    Q_PROPERTY(QVariantList sizeEstimates READ sizeEstimates NOTIFY snapshotChanged)
+    Q_PROPERTY(QVariantMap census READ census NOTIFY snapshotChanged)
     Q_PROPERTY(QString nodeIdV4 READ nodeIdV4 WRITE setNodeIdV4 NOTIFY nodeIdV4Changed)
     Q_PROPERTY(QString nodeIdV6 READ nodeIdV6 WRITE setNodeIdV6 NOTIFY nodeIdV6Changed)
 
@@ -108,6 +112,16 @@ public:
     int catalogCap() const { return m_catalogCap; }
     void setCatalogCap(int cap);
     CrawlStatus crawl() const { return m_crawl; }
+    // Which family the statistics describe: "all", "ipv4" or "ipv6".
+    QString statsFamily() const { return m_statsFamily; }
+    void setStatsFamily(const QString &family);
+    // Ready to display: see buildNetworkStats() for the shape.
+    QVariantMap networkStats() const { return m_networkStats; }
+    QVariantList sizeEstimates() const { return m_sizeEstimates; }
+    // The precise count: progress, per-slice results and totals.
+    QVariantMap census() const { return m_census; }
+    Q_INVOKABLE void startCensus();
+    Q_INVOKABLE void cancelCensus();
 
     // Node IDs as typed, normally 40 hex digits. Editable while stopped;
     // while running they follow the engine, which may replace them (BEP 42).
@@ -194,6 +208,8 @@ signals:
     void sendLimitChanged();
     void monitoringChanged();
     void catalogCapChanged();
+    void statsFamilyChanged();
+    void networkStatsChanged();
     void nodeIdV4Changed();
     void nodeIdV6Changed();
     void snapshotChanged();
@@ -238,6 +254,12 @@ private:
     bool m_monitoring = false;
     int m_catalogCap = dht::NodeCatalog::DefaultCap;
     CrawlStatus m_crawl;
+    QString m_statsFamily = QStringLiteral("all");
+    std::shared_ptr<const dht::NetworkStatsSet> m_statsSet;
+    QVariantMap m_networkStats;
+    QVariantList m_sizeEstimates;
+    QVariantMap m_census;
+    void buildNetworkStats();
 
     // Recent byte totals, for the transfer rates.
     struct TrafficSample

@@ -56,6 +56,7 @@ void Crawler::setMonitoring(bool on)
     } else {
         m_timer.stop();
         m_monitoredMs += now - m_monitoringSinceMs;
+        refreshStats(now);  // what was found stays on view, up to date
     }
 }
 
@@ -108,6 +109,13 @@ void Crawler::tick()
     while (sent < m_batch && !backlogged() && dispatchNext(now))
         ++sent;
     m_lastTickFull = sent >= m_batch;
+
+    if (m_config.sizeEstimateIntervalMs > 0 && now >= m_nextEstimateMs) {
+        m_nextEstimateMs = now + m_config.sizeEstimateIntervalMs;
+        estimateSize();
+    }
+    if (now >= m_nextStatsMs)
+        refreshStats(now);
 }
 
 void Crawler::seed(qint64 now)
@@ -136,15 +144,55 @@ void Crawler::widen()
         m_widening[int(node->family())] = true;
         const Family family = node->family();
         QPointer<Crawler> self(this);
-        node->findNode(NodeId::random(), [self, family](const Lookup::Result &result) {
+        const NodeId target = NodeId::random();
+        node->findNode(target, [self, family, target](const Lookup::Result &result) {
             if (!self)
                 return;
             self->m_widening[int(family)] = false;
-            const qint64 now = nowMs();
-            for (const Lookup::Contact &contact : result.closest)
-                self->learn({contact.id, contact.endpoint}, now);
+            self->recordLookup(family, target, result.closest);
         });
     }
+}
+
+void Crawler::estimateSize()
+{
+    for (DhtNode *node : {m_v4.data(), m_v6.data()}) {
+        if (!node || m_estimating[int(node->family())] >= MaxEstimates)
+            continue;
+        const Family family = node->family();
+        ++m_estimating[int(family)];
+        const NodeId target = NodeId::random();
+        QPointer<Crawler> self(this);
+        node->findNode(target, [self, family, target](const Lookup::Result &result) {
+            if (!self)
+                return;
+            --self->m_estimating[int(family)];
+            self->recordLookup(family, target, result.closest);
+        });
+    }
+}
+
+void Crawler::recordLookup(Family family, const NodeId &target, const std::vector<Lookup::Contact> &closest)
+{
+    // Every random-target lookup is a size sample, and its nodes are worth
+    // knowing about.
+    std::vector<NodeId> ids;
+    ids.reserve(closest.size());
+    for (const Lookup::Contact &contact : closest)
+        ids.push_back(contact.id);
+    if (int(ids.size()) >= Lookup::K)
+        m_size[int(family)].add(estimateNetworkSize(target, ids));
+
+    const qint64 now = nowMs();
+    for (const Lookup::Contact &contact : closest)
+        learn({contact.id, contact.endpoint}, now);
+}
+
+void Crawler::refreshStats(qint64 now)
+{
+    auto stats = std::make_shared<NetworkStatsSet>(computeNetworkStats(*m_catalog, now));
+    m_nextStatsMs = now + std::max<qint64>(StatsIntervalMs, qint64(StatsCostFactor) * stats->computeMs);
+    m_stats = std::move(stats);
 }
 
 NodeCatalog::Slot Crawler::takeDue(std::deque<Ref> &queue, qint64 minAgeMs, qint64 now)
@@ -368,6 +416,9 @@ CrawlSnapshot Crawler::snapshot() const
     s.waiting = int(m_fresh.size() + m_deferred.size());
     s.batch = m_monitoring ? m_batch : 0;
     s.monitoredMs = m_monitoredMs + (m_monitoring ? now - m_monitoringSinceMs : 0);
+    s.stats = m_stats;
+    s.sizeV4 = m_size[0].summary();
+    s.sizeV6 = m_size[1].summary();
 
     // Discovering while any node has yet to answer or run out of tries.
     if (!m_monitoring)

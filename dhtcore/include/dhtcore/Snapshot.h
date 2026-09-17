@@ -2,12 +2,14 @@
 
 #include "dhtcore/Bep42.h"
 #include "dhtcore/Endpoint.h"
+#include "dhtcore/NetworkStats.h"
 #include "dhtcore/NodeId.h"
 
 #include <QHostAddress>
 #include <QMetaType>
 #include <QString>
 
+#include <memory>
 #include <vector>
 
 namespace dht {
@@ -142,6 +144,63 @@ struct CrawlSnapshot
     int waiting = 0;      // queued to be asked
     int batch = 0;        // queries per tick the crawler currently allows itself
     qint64 monitoredMs = 0;
+
+    // Recomputed every few seconds while scanning; shared, not copied.
+    std::shared_ptr<const NetworkStatsSet> stats;
+    SizeEstimate sizeV4;
+    SizeEstimate sizeV6;
+};
+
+// --- precise count (Census) -------------------------------------------------
+
+// One slice, counted.
+struct CensusSlice
+{
+    Family family = Family::IPv4;
+    int bits = 0;
+    NodeId prefix;
+    int nodesHeard = 0;      // address-and-port entries listed inside the slice
+    int nodesAnswered = 0;   // of those, answering with an ID inside the slice
+    int ipsHeard = 0;
+    int ipsAnswered = 0;
+    double heardEstimate = 0;      // addresses in the whole network, scaled from this slice
+    double connectedEstimate = 0;
+    int rounds = 0;
+    qint64 queries = 0;
+    qint64 durationMs = 0;
+};
+
+struct CensusTotal
+{
+    int slices = 0;
+    double heard = 0;       // mean over slices
+    double heardLow = 0;    // 95% confidence interval
+    double heardHigh = 0;
+    double connected = 0;
+    double connectedLow = 0;
+    double connectedHigh = 0;
+};
+
+struct CensusSnapshot
+{
+    enum class State { Idle, Running, Done, Cancelled };
+
+    State state = State::Idle;
+    int slicesTotal = 0;
+    int slicesDone = 0;
+    // The slice in progress.
+    Family family = Family::IPv4;
+    int bits = 0;
+    int round = 0;
+    int nodesFound = 0;
+    int nodesAnswered = 0;
+    int outstanding = 0;
+    qint64 queries = 0;
+    qint64 elapsedMs = 0;
+
+    std::vector<CensusSlice> slices;  // finished ones
+    CensusTotal ipv4;
+    CensusTotal ipv6;
 };
 
 struct EngineSnapshot
@@ -153,6 +212,7 @@ struct EngineSnapshot
     EngineStats stats;
     std::vector<NodeRow> nodes;
     CrawlSnapshot crawl;
+    CensusSnapshot census;
 };
 
 // --- data store -------------------------------------------------------------

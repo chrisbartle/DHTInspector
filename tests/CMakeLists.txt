@@ -6,9 +6,11 @@ qt_add_executable(dhtcore_tests
     TestBencode.cpp
     TestBep42.cpp
     TestBep44.cpp
+    TestCensus.cpp
     TestClientVersion.cpp
     TestEngine.cpp
     TestKrpc.cpp
+    TestNetworkStats.cpp
     TestNodeCatalog.cpp
     TestPortMapper.cpp
     TestRoutingTable.cpp

@@ -108,6 +108,75 @@ CrawlStatus toCrawlStatus(const dht::CrawlSnapshot &c)
     return out;
 }
 
+QVariantMap toCensusMap(const dht::CensusSnapshot &c)
+{
+    const auto familyName = [](dht::Family f) {
+        return f == dht::Family::IPv4 ? QStringLiteral("IPv4") : QStringLiteral("IPv6");
+    };
+    QString state;
+    switch (c.state) {
+    case dht::CensusSnapshot::State::Idle: state = QStringLiteral("idle"); break;
+    case dht::CensusSnapshot::State::Running: state = QStringLiteral("running"); break;
+    case dht::CensusSnapshot::State::Done: state = QStringLiteral("done"); break;
+    case dht::CensusSnapshot::State::Cancelled: state = QStringLiteral("cancelled"); break;
+    }
+
+    QVariantList totals;
+    for (const auto &[family, t] : {std::pair{dht::Family::IPv4, c.ipv4}, std::pair{dht::Family::IPv6, c.ipv6}}) {
+        if (t.slices == 0)
+            continue;
+        int bits = 0;
+        for (const dht::CensusSlice &slice : c.slices) {
+            if (slice.family == family)
+                bits = slice.bits;
+        }
+        totals.append(QVariantMap{
+            {QStringLiteral("family"), familyName(family)},
+            {QStringLiteral("slices"), t.slices},
+            {QStringLiteral("bits"), bits},
+            {QStringLiteral("heard"), t.heard},
+            {QStringLiteral("heardLow"), t.heardLow},
+            {QStringLiteral("heardHigh"), t.heardHigh},
+            {QStringLiteral("connected"), t.connected},
+            {QStringLiteral("connectedLow"), t.connectedLow},
+            {QStringLiteral("connectedHigh"), t.connectedHigh},
+        });
+    }
+
+    QVariantList slices;
+    for (const dht::CensusSlice &s : c.slices) {
+        slices.append(QVariantMap{
+            {QStringLiteral("family"), familyName(s.family)},
+            {QStringLiteral("bits"), s.bits},
+            {QStringLiteral("ipsHeard"), s.ipsHeard},
+            {QStringLiteral("ipsAnswered"), s.ipsAnswered},
+            {QStringLiteral("nodesHeard"), s.nodesHeard},
+            {QStringLiteral("nodesAnswered"), s.nodesAnswered},
+            {QStringLiteral("heardEstimate"), s.heardEstimate},
+            {QStringLiteral("connectedEstimate"), s.connectedEstimate},
+            {QStringLiteral("rounds"), s.rounds},
+            {QStringLiteral("queries"), double(s.queries)},
+            {QStringLiteral("seconds"), double(s.durationMs) / 1000.0},
+        });
+    }
+
+    return QVariantMap{
+        {QStringLiteral("state"), state},
+        {QStringLiteral("slicesDone"), c.slicesDone},
+        {QStringLiteral("slicesTotal"), c.slicesTotal},
+        {QStringLiteral("family"), familyName(c.family)},
+        {QStringLiteral("bits"), c.bits},
+        {QStringLiteral("round"), c.round},
+        {QStringLiteral("nodesFound"), c.nodesFound},
+        {QStringLiteral("nodesAnswered"), c.nodesAnswered},
+        {QStringLiteral("outstanding"), c.outstanding},
+        {QStringLiteral("queries"), double(c.queries)},
+        {QStringLiteral("seconds"), double(c.elapsedMs) / 1000.0},
+        {QStringLiteral("totals"), totals},
+        {QStringLiteral("slices"), slices},
+    };
+}
+
 } // namespace
 
 DhtController::DhtController(QObject *parent)
@@ -256,6 +325,182 @@ void DhtController::setMonitoring(bool on)
         QMetaObject::invokeMethod(m_engine, [engine = m_engine, on] { engine->setMonitoring(on); },
                                   Qt::QueuedConnection);
     }
+}
+
+void DhtController::setStatsFamily(const QString &family)
+{
+    if (family == m_statsFamily
+        || (family != QLatin1String("all") && family != QLatin1String("ipv4") && family != QLatin1String("ipv6")))
+        return;
+    m_statsFamily = family;
+    emit statsFamilyChanged();
+    buildNetworkStats();
+}
+
+namespace {
+
+constexpr int ShownClients = 12;
+constexpr int ShownVersions = 15;
+constexpr int ShownPorts = 10;
+
+double shareOf(double part, double whole)
+{
+    return whole > 0 ? part / whole : 0.0;
+}
+
+// The most common entries, then everything else folded into one line.
+QVariantList talliesFor(const std::vector<dht::ClientTally> &tallies, int shown, int responsive)
+{
+    QVariantList out;
+    double rest = 0;
+    int restKinds = 0;
+    for (size_t i = 0; i < tallies.size(); ++i) {
+        const dht::ClientTally &t = tallies[i];
+        if (int(i) < shown) {
+            out.append(QVariantMap{
+                {QStringLiteral("name"), t.name},
+                {QStringLiteral("version"), t.version},
+                {QStringLiteral("kind"), t.kind},
+                {QStringLiteral("count"), t.count},
+                {QStringLiteral("share"), shareOf(t.count, responsive)},
+            });
+        } else {
+            rest += t.count;
+            ++restKinds;
+        }
+    }
+    if (rest > 0) {
+        out.append(QVariantMap{
+            {QStringLiteral("name"), DhtController::tr("%n other(s)", "", restKinds)},
+            {QStringLiteral("version"), QString()},
+            {QStringLiteral("kind"), QStringLiteral("other")},
+            {QStringLiteral("count"), rest},
+            {QStringLiteral("share"), shareOf(rest, responsive)},
+        });
+    }
+    return out;
+}
+
+// Round-trip histogram in display bins: 50 ms wide up to a second, then
+// coarser.
+QVariantList rttBins(const std::vector<double> &histogram, double samples)
+{
+    struct Bin
+    {
+        int from;
+        int to;  // exclusive
+    };
+    std::vector<Bin> bins;
+    for (int from = 0; from < 1000; from += 50)
+        bins.push_back({from, from + 50});
+    bins.push_back({1000, 1500});
+    bins.push_back({1500, 2000});
+    bins.push_back({2000, dht::NetworkStats::MaxRttMs + 1});
+
+    QVariantList out;
+    for (const Bin &bin : bins) {
+        double count = 0;
+        for (int ms = bin.from; ms < bin.to && ms < int(histogram.size()); ++ms)
+            count += histogram[ms];
+        out.append(QVariantMap{
+            {QStringLiteral("from"), bin.from},
+            {QStringLiteral("to"), bin.to},
+            {QStringLiteral("count"), count},
+            {QStringLiteral("share"), shareOf(count, samples)},
+        });
+    }
+    return out;
+}
+
+} // namespace
+
+void DhtController::buildNetworkStats()
+{
+    QVariantMap out;
+    out.insert(QStringLiteral("available"), bool(m_statsSet));
+    if (m_statsSet) {
+        const dht::NetworkStats &s = m_statsFamily == QLatin1String("ipv4") ? m_statsSet->ipv4
+                                     : m_statsFamily == QLatin1String("ipv6") ? m_statsSet->ipv6
+                                                                                : m_statsSet->all;
+        out.insert(QStringLiteral("computeMs"), m_statsSet->computeMs);
+        const auto counts = [](const dht::NetworkStats &n) {
+            return QVariantMap{
+                {QStringLiteral("heardIps"), n.heardIps},
+                {QStringLiteral("connectedIps"), n.connectedIps},
+                {QStringLiteral("answeringIps"), n.answeringIps},
+                {QStringLiteral("unroutableIps"), n.unroutableIps},
+                {QStringLiteral("multiNodeIps"), n.multiNodeIps},
+                {QStringLiteral("maxNodesPerIp"), n.maxNodesPerIp},
+                {QStringLiteral("answeringNodes"), n.answeringNodes},
+            };
+        };
+        out.insert(QStringLiteral("counts"), counts(s));
+        out.insert(QStringLiteral("totals"), counts(m_statsSet->all));  // whatever the selected family
+        out.insert(QStringLiteral("answeringIps"), s.answeringIps);
+
+        out.insert(QStringLiteral("clients"), talliesFor(s.clients, ShownClients, s.answeringIps));
+        out.insert(QStringLiteral("versions"), talliesFor(s.versions, ShownVersions, s.answeringIps));
+        out.insert(QStringLiteral("distinctClients"), int(s.clients.size()));
+        out.insert(QStringLiteral("distinctVersions"), int(s.versions.size()));
+        double noVersion = 0;
+        for (const dht::ClientTally &t : s.clients) {
+            if (t.kind == QLatin1String("absent"))
+                noVersion += t.count;
+        }
+        out.insert(QStringLiteral("noVersionShare"), shareOf(noVersion, s.answeringIps));
+
+        using dht::bep42::Status;
+        const auto bep = [&](Status status) { return s.bep42[int(status)]; };
+        out.insert(QStringLiteral("bep42"), QVariantMap{
+            {QStringLiteral("compliant"), bep(Status::Compliant)},
+            {QStringLiteral("noncompliant"), bep(Status::NonCompliant)},
+            {QStringLiteral("exempt"), bep(Status::Exempt)},
+            {QStringLiteral("unknown"), bep(Status::Unknown)},
+        });
+
+        QVariantList bins = rttBins(s.rttHistogram, s.rttWeight);
+        double peak = 0;
+        for (const QVariant &bin : std::as_const(bins))
+            peak = std::max(peak, bin.toMap().value(QStringLiteral("share")).toDouble());
+        out.insert(QStringLiteral("rtt"), QVariantMap{
+            {QStringLiteral("samples"), s.rttWeight},
+            {QStringLiteral("mean"), s.rttMeanMs},
+            {QStringLiteral("median"), s.rttMedianMs},
+            {QStringLiteral("p90"), s.rttP90Ms},
+            {QStringLiteral("p99"), s.rttP99Ms},
+            {QStringLiteral("bins"), bins},
+            {QStringLiteral("peakShare"), peak},
+        });
+
+        QVariantList ports;
+        for (size_t i = 0; i < s.topPorts.size() && int(i) < ShownPorts; ++i) {
+            ports.append(QVariantMap{
+                {QStringLiteral("port"), s.topPorts[i].first},
+                {QStringLiteral("count"), s.topPorts[i].second},
+                {QStringLiteral("share"), shareOf(s.topPorts[i].second, s.answeringIps)},
+            });
+        }
+        out.insert(QStringLiteral("ports"), QVariantMap{
+            {QStringLiteral("distinct"), s.distinctPorts},
+            {QStringLiteral("defaultCount"), s.defaultPortCount},
+            {QStringLiteral("defaultShare"), shareOf(s.defaultPortCount, s.answeringIps)},
+            {QStringLiteral("top"), ports},
+        });
+    }
+    m_networkStats = out;
+    emit networkStatsChanged();
+}
+
+void DhtController::startCensus()
+{
+    if (m_engine)
+        QMetaObject::invokeMethod(m_engine, &dht::DhtEngine::startCensus, Qt::QueuedConnection);
+}
+
+void DhtController::cancelCensus()
+{
+    if (m_engine)
+        QMetaObject::invokeMethod(m_engine, &dht::DhtEngine::cancelCensus, Qt::QueuedConnection);
 }
 
 void DhtController::setCatalogCap(int cap)
@@ -442,6 +687,10 @@ void DhtController::resetStatus()
     m_portMapping = PortMappingStatus{};
     m_stats = EngineStatistics{};
     m_crawl = CrawlStatus{};
+    m_sizeEstimates.clear();
+    m_census = toCensusMap(dht::CensusSnapshot{});
+    m_statsSet.reset();
+    buildNetworkStats();
     m_traffic.clear();
     m_nodes->clear();
     clearDataStore();
@@ -486,6 +735,38 @@ void DhtController::applySnapshot(const dht::EngineSnapshot &snapshot)
     }
 
     m_crawl = toCrawlStatus(c);
+
+    if (c.stats != m_statsSet) {
+        m_statsSet = c.stats;
+        buildNetworkStats();
+    }
+    // Size estimates, with how much of each network the scan has reached.
+    m_sizeEstimates.clear();
+    // The quick estimate counts nodes; divided by the nodes per answering
+    // address seen so far, it becomes a rough count of addresses.
+    const auto addEstimate = [&](const QString &family, const dht::SizeEstimate &e,
+                                 const dht::NetworkStats *stats, bool enabled) {
+        if (!enabled)
+            return;
+        const double perIp = stats ? stats->nodesPerIp() : 1.0;
+        const int answering = stats ? stats->answeringIps : 0;
+        const double ips = e.median / perIp;
+        m_sizeEstimates.append(QVariantMap{
+            {QStringLiteral("family"), family},
+            {QStringLiteral("samples"), e.samples},
+            {QStringLiteral("nodes"), e.median},
+            {QStringLiteral("nodesPerIp"), perIp},
+            {QStringLiteral("median"), ips},
+            {QStringLiteral("low"), e.low / perIp},
+            {QStringLiteral("high"), e.high / perIp},
+            {QStringLiteral("answeringIps"), answering},
+            {QStringLiteral("coverage"), ips > 0 ? double(answering) / ips : 0.0},
+        });
+    };
+    addEstimate(QStringLiteral("IPv4"), c.sizeV4, c.stats ? &c.stats->ipv4 : nullptr, true);
+    addEstimate(QStringLiteral("IPv6"), c.sizeV6, c.stats ? &c.stats->ipv6 : nullptr, snapshot.ipv6.enabled);
+
+    m_census = toCensusMap(snapshot.census);
     if (now - oldest.atMs >= 250) {
         const double seconds = double(now - oldest.atMs) / 1000.0;
         m_crawl.queriesPerSecond = double(c.queries - oldest.crawlQueries) / seconds;

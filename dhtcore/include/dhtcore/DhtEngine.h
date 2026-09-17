@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dhtcore/Census.h"
 #include "dhtcore/Crawler.h"
 #include "dhtcore/DhtNode.h"
 #include "dhtcore/NodeCatalog.h"
@@ -37,6 +38,7 @@ struct EngineConfig
     // Scanning itself starts only when monitoring is switched on.
     int catalogCap = NodeCatalog::DefaultCap;
     CrawlConfig crawl;
+    CensusConfig census;
     bool allowLocalAddresses = false;  // for LAN and loopback testing
     QHostAddress bindAddressV4;        // null: any
     QHostAddress bindAddressV6;        // null: any
@@ -84,6 +86,12 @@ public:
     void setMonitoring(bool on);
     bool isMonitoring() const { return m_crawler && m_crawler->isMonitoring(); }
     void setCatalogCap(int cap);
+
+    // The precise count. Runs with or without monitoring; the scan's size
+    // estimate, if there is one, chooses how wide the slices are.
+    void startCensus();
+    void cancelCensus();
+    bool isCensusRunning() const { return m_census && m_census->isRunning(); }
     const NodeCatalog &catalog() const { return m_catalog; }
     qint64 sendLimit() const { return m_budget.limit(); }
 
@@ -137,6 +145,7 @@ private:
     SendBudget m_budget;
     NodeCatalog m_catalog;
     Crawler *m_crawler = nullptr;
+    Census *m_census = nullptr;
     DhtNode *m_v4 = nullptr;
     DhtNode *m_v6 = nullptr;
     QString m_v6Error;

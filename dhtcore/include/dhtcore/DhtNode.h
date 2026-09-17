@@ -51,6 +51,7 @@ public:
 
     Family family() const { return m_config.family; }
     quint16 port() const;
+    QHostAddress localAddress() const;
     const NodeId &id() const { return m_id; }
     QHostAddress externalAddress() const { return m_voter.consensus(); }
 
