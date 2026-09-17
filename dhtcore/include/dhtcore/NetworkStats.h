@@ -79,8 +79,9 @@ int histogramQuantile(const std::vector<double> &histogram, double total, double
 // of about i/N of the ID space. A least-squares fit of the k closest
 // distances gives N = sum(i^2) / sum(i * d_i), scaled slightly so that the
 // median of many such estimates is unbiased. This counts nodes, not
-// addresses. Nodes that do not answer are not found, and lookups miss some
-// nearby nodes, so it reads low. Returns 0 with fewer than four nodes.
+// addresses, and only nodes that answer. It assumes uniformly spread IDs
+// and complete lookups, which the real network does not guarantee, so it
+// is a rough figure. Returns 0 with fewer than four nodes.
 double estimateNetworkSize(const NodeId &target, const std::vector<NodeId> &closest);
 
 struct SizeEstimate

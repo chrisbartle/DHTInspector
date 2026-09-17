@@ -73,7 +73,9 @@ Two jobs, one tool:
 - Quick size estimate: random-ID lookups run alongside the scan, and the
   spread of the eight closest nodes estimates the number of nodes; divided
   by the nodes per answering address seen so far, it gives a rough count
-  of addresses. Lookups miss some nearby nodes, so it reads low.
+  of addresses. It is a rough figure that rests on assumptions about how
+  node IDs are spread and how complete lookups are; on the live network it
+  has come out well above the precise count, which takes precedence.
 - Precise count (a button, with or without monitoring): takes random
   slices of the ID space, a few thousand nodes each, and keeps asking the
   nodes inside with different targets until two rounds turn up nothing

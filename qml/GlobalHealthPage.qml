@@ -661,7 +661,7 @@ ScrollView {
 
                     Hint {
                         visible: estimate.modelData.samples > 0
-                        text: qsTr("From %n random lookup(s), about %1 nodes, at %2 nodes per address seen so far (95%: %3 to %4 addresses). Lookups miss some nearby nodes, so this reads low; the precise count is the firmer figure. The scan has reached %5 of them (%6).", "", estimate.modelData.samples)
+                        text: qsTr("From %n random lookup(s), about %1 nodes, at %2 nodes per address seen so far (95%: %3 to %4 addresses). This is a rough figure: it rests on assumptions about how node IDs are spread and how complete lookups are, and on the live network it has come out well above the precise count. When the two disagree, go by the precise count. The scan has reached %5 of them (%6).", "", estimate.modelData.samples)
                               .arg(page.big(estimate.modelData.nodes))
                               .arg(estimate.modelData.nodesPerIp.toFixed(2))
                               .arg(page.big(estimate.modelData.low)).arg(page.big(estimate.modelData.high))
