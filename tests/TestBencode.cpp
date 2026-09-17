@@ -3,6 +3,7 @@
 #include <QTest>
 
 #include <limits>
+#include <utility>
 
 using namespace dht;
 

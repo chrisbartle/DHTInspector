@@ -1,6 +1,8 @@
 #include "dhtcore/RoutingTable.h"
 
 #include <algorithm>
+#include <iterator>
+#include <utility>
 
 namespace dht {
 

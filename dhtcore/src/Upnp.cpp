@@ -14,6 +14,7 @@
 #include <QXmlStreamReader>
 
 #include <algorithm>
+#include <utility>
 
 namespace dht {
 

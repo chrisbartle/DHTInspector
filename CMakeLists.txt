@@ -18,6 +18,13 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Network Gui Qml Quick QuickControl
 
 qt_standard_project_setup(REQUIRES 6.5)
 
+# The QML module is built into a directory named after its URI. That would
+# be the build directory's own "DHTInspector", which on platforms where
+# executables have no suffix is exactly where the binary goes, so the link
+# fails with "cannot open output file DHTInspector: Is a directory". Keep
+# the generated modules apart from the binaries.
+set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/qml_modules")
+
 # Our .qml files live in a subdirectory, so let Qt generate the extra
 # qmldir files for it rather than hand-maintaining them.
 if(QT_KNOWN_POLICY_QTP0004)

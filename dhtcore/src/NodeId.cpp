@@ -2,6 +2,7 @@
 
 #include <QRandomGenerator>
 
+#include <algorithm>
 #include <bit>
 
 namespace dht {

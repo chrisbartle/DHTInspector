@@ -4,6 +4,8 @@
 #include <QRegularExpression>
 #include <QtEndian>
 
+#include <algorithm>
+
 namespace dht {
 
 QString familyName(Family family)

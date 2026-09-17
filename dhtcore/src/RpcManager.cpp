@@ -4,6 +4,8 @@
 
 #include <QRandomGenerator>
 
+#include <utility>
+
 namespace dht {
 
 namespace {

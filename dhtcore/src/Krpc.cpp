@@ -1,6 +1,7 @@
 #include "dhtcore/Krpc.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace dht::krpc {
 

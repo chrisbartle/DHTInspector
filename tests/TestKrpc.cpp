@@ -340,3 +340,5 @@ int runTestKrpc(int argc, char **argv)
 }
 
 #include "TestKrpc.moc"
+
+#include <utility>

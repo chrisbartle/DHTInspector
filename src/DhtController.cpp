@@ -20,6 +20,7 @@
 
 #include <cmath>
 #include <limits>
+#include <tuple>
 
 namespace {
 

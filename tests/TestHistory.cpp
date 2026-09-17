@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <set>
+#include <string>
 
 using namespace dht;
 

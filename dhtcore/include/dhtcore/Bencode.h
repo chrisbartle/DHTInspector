@@ -7,6 +7,7 @@
 
 #include <map>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace dht {

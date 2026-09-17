@@ -1,6 +1,7 @@
 #include "dhtcore/Bencode.h"
 
 #include <limits>
+#include <utility>
 
 namespace dht {
 

@@ -1,5 +1,7 @@
 #include "SearchModels.h"
 
+#include <utility>
+
 PeerResultModel::PeerResultModel(QObject *parent)
     : QAbstractListModel(parent)
 {

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <limits>
 #include <random>
+#include <utility>
 
 namespace dht {
 
