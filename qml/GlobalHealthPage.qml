@@ -51,6 +51,10 @@ ScrollView {
         return qsTr("%1 s").arg(s)
     }
 
+    function ofChecked(name, checked) {
+        return qsTr("%1 (of %2)").arg(name).arg(count(checked))
+    }
+
     function percent(fraction) {
         return (100 * fraction).toFixed(fraction > 0 && fraction < 0.01 ? 2 : 1) + "%"
     }
@@ -133,7 +137,8 @@ ScrollView {
         }
     }
 
-    // A labelled share bar: name, bar, count, percentage.
+    // A labelled share bar: name, bar, count, percentage. With `filters`
+    // set, the name is a link that shows those nodes in the list below.
     component ShareRow: RowLayout {
         id: shareRow
 
@@ -141,19 +146,42 @@ ScrollView {
         property int count
         property real share
         property color tone: Theme.accent
+        property var filters: null
+        readonly property bool isLink: filters !== null
 
         Layout.fillWidth: true
         spacing: Theme.spacing
 
         Label {
+            id: shareLabel
+
             Layout.preferredWidth: 280
+            Layout.minimumWidth: 70
             text: shareRow.label
             elide: Text.ElideRight
-            color: Theme.text
+            color: !shareRow.isLink ? Theme.text
+                                    : shareLabelHover.hovered ? Qt.lighter(Theme.accent, 1.25) : Theme.accent
             font.pixelSize: Theme.fontSizeSmall
+            font.underline: shareRow.isLink && shareLabelHover.hovered
+
+            Accessible.role: shareRow.isLink ? Accessible.Link : Accessible.StaticText
+            Accessible.name: shareRow.label
+            Accessible.description: shareRow.isLink ? qsTr("Filter the node list to these nodes") : ""
+            Accessible.onPressAction: if (shareRow.isLink) page.showNodes(shareRow.filters)
+
+            HoverHandler {
+                id: shareLabelHover
+                enabled: shareRow.isLink
+                cursorShape: Qt.PointingHandCursor
+            }
+            TapHandler {
+                enabled: shareRow.isLink
+                onTapped: page.showNodes(shareRow.filters)
+            }
         }
         Rectangle {
             Layout.fillWidth: true
+            Layout.minimumWidth: 24
             implicitHeight: 8
             radius: 4
             color: Theme.surfaceAlt
@@ -167,6 +195,7 @@ ScrollView {
         }
         Label {
             Layout.preferredWidth: 90
+            Layout.minimumWidth: 55
             horizontalAlignment: Text.AlignRight
             text: page.count(shareRow.count)
             color: Theme.text
@@ -175,6 +204,7 @@ ScrollView {
         }
         Label {
             Layout.preferredWidth: 60
+            Layout.minimumWidth: 42
             horizontalAlignment: Text.AlignRight
             text: page.percent(shareRow.share)
             color: Theme.textDim
@@ -209,39 +239,6 @@ ScrollView {
 
         HoverHandler { id: linkHover; enabled: link.enabled; cursorShape: Qt.PointingHandCursor }
         TapHandler { enabled: link.enabled; onTapped: page.showNodes(link.filters) }
-    }
-
-    // A share row with a link to the nodes behind it. `checked` is how many
-    // addresses the share is of, when that differs from the total.
-    component FeatureRow: RowLayout {
-        id: featureRow
-
-        property string label
-        property real count
-        property real share
-        property real checked: -1
-        property color tone: Theme.accent
-        property var filters: ({})
-        property string showLabel: qsTr("Show")
-        property bool showVisible: count > 0
-
-        Layout.fillWidth: true
-        spacing: Theme.spacing
-
-        ShareRow {
-            label: featureRow.checked >= 0 ? qsTr("%1 (of %2)").arg(featureRow.label).arg(page.count(featureRow.checked))
-                                           : featureRow.label
-            count: featureRow.count
-            share: featureRow.share
-            tone: featureRow.tone
-        }
-        ShowLink {
-            Layout.preferredWidth: 110
-            opacity: featureRow.showVisible ? 1 : 0
-            enabled: featureRow.showVisible
-            filters: featureRow.filters
-            showLabel: featureRow.showLabel
-        }
     }
 
     // Shows the controller's real state; a flip is a request, so a refused
@@ -1330,14 +1327,13 @@ ScrollView {
                         { key: "sendsIp", label: qsTr("BEP 42 ip field in replies"), filter: "ip-yes" }
                     ] : []
 
-                    delegate: FeatureRow {
+                    delegate: ShareRow {
                         required property var modelData
                         readonly property var t: featuresPanel.f[modelData.key]
-                        label: modelData.label
+                        label: page.ofChecked(modelData.label, t.tested)
                         count: t.yes
                         share: Math.max(0, t.share)
-                        checked: t.tested
-                        filters: ({ feature: modelData.filter, states: ["responsive"] })
+                        filters: t.yes > 0 ? { feature: modelData.filter, states: ["responsive"] } : null
                     }
                 }
 
@@ -1354,14 +1350,14 @@ ScrollView {
                         { key: "silent", label: qsTr("No answer"), filter: "unknown-none", tone: Theme.textDim }
                     ] : []
 
-                    delegate: FeatureRow {
+                    delegate: ShareRow {
                         required property var modelData
-                        label: modelData.label
-                        count: featuresPanel.unknown[modelData.key]
-                        share: featuresPanel.unknown.tested > 0 ? featuresPanel.unknown[modelData.key] / featuresPanel.unknown.tested : 0
-                        checked: featuresPanel.unknown.tested
+                        readonly property real n: featuresPanel.unknown[modelData.key]
+                        label: page.ofChecked(modelData.label, featuresPanel.unknown.tested)
+                        count: n
+                        share: featuresPanel.unknown.tested > 0 ? n / featuresPanel.unknown.tested : 0
                         tone: modelData.tone
-                        filters: ({ feature: modelData.filter, states: ["responsive"] })
+                        filters: n > 0 ? { feature: modelData.filter, states: ["responsive"] } : null
                     }
                 }
 
@@ -1414,17 +1410,16 @@ ScrollView {
                 Repeater {
                     model: badPanel.bad.byProblem
 
-                    delegate: FeatureRow {
+                    delegate: ShareRow {
                         required property var modelData
+                        required property int index
                         label: modelData.name
                         count: modelData.count
                         share: badPanel.bad.unreachable > 0 ? modelData.count / badPanel.bad.unreachable : 0
                         tone: Theme.textDim
-                        filters: ({ states: ["unreachable"] })
-                        showLabel: qsTr("Show unreachable")
-                        // Port 0 on an otherwise good address is not in the unreachable list.
-                        showVisible: modelData.count > 0 && index !== 0
-                        required property int index
+                        // Port 0 on an otherwise good address is not among
+                        // the unreachable ones, so there is nothing to show.
+                        filters: modelData.count > 0 && index !== 0 ? { states: ["unreachable"] } : null
                     }
                 }
 
