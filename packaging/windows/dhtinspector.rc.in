@@ -22,11 +22,11 @@ BEGIN
         // US English, Unicode: must agree with the Translation value below.
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName",      "@DHTINSPECTOR_COMPANY@"
+            VALUE "CompanyName",      "Chris Bartle"
             VALUE "FileDescription",  "@PROJECT_DESCRIPTION@"
             VALUE "FileVersion",      "@PROJECT_VERSION@"
             VALUE "InternalName",     "DHTInspector"
-            VALUE "LegalCopyright",   "@DHTINSPECTOR_COPYRIGHT@"
+            VALUE "LegalCopyright",   "Copyright (C) Chris Bartle"
             VALUE "OriginalFilename", "DHTInspector.exe"
             VALUE "ProductName",      "DHT Inspector"
             VALUE "ProductVersion",   "@PROJECT_VERSION@"
