@@ -102,6 +102,28 @@ set_target_properties(DHTInspector PROPERTIES
 )
 
 # ---------------------------------------------------------------------------
+# Icons. 16 to 24 come from a four-spoke drawing and 32 and 48 from one
+# without the orbit rings, because the full artwork turns to mush below
+# about 64; see packaging/linux/dhtinspector-small.svg. Regenerate with
+# tools/render-icons; see its README.
+# ---------------------------------------------------------------------------
+set(DHTINSPECTOR_ICON_SIZES 16 22 24 32 48 64 128 256)
+
+set(icon_files "")
+foreach(size IN LISTS DHTINSPECTOR_ICON_SIZES)
+    list(APPEND icon_files packaging/linux/icons/${size}x${size}/dhtinspector.png)
+endforeach()
+
+# Embedded as well as installed: a window icon set by the application works
+# even unpackaged, and on Wayland, where matching a window back to its
+# .desktop file is unreliable.
+qt_add_resources(DHTInspector "appicons"
+    PREFIX "/icons"
+    BASE packaging/linux/icons
+    FILES ${icon_files}
+)
+
+# ---------------------------------------------------------------------------
 # Install rules. These exist mainly so `cmake --install` can populate an
 # AppDir for the Linux AppImage; see packaging/linux/build-appimage.sh.
 # ---------------------------------------------------------------------------
@@ -117,9 +139,17 @@ if(UNIX AND NOT APPLE)
     install(FILES packaging/linux/dhtinspector.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )
+    # The SVG covers sizes nothing has a PNG for, such as a fractional scale
+    # factor; icon lookup prefers an exact match, so the PNGs below are what
+    # a panel or dock actually draws.
     install(FILES packaging/linux/dhtinspector.svg
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/scalable/apps
     )
+    foreach(size IN LISTS DHTINSPECTOR_ICON_SIZES)
+        install(FILES packaging/linux/icons/${size}x${size}/dhtinspector.png
+            DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/${size}x${size}/apps
+        )
+    endforeach()
 endif()
 
 # Runtime deployment only makes sense against a shared Qt. The static Windows

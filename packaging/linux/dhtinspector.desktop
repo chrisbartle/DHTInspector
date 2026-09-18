@@ -6,5 +6,6 @@ Comment=Interrogate individual nodes and monitor the health of the mainline DHT
 Exec=DHTInspector
 Icon=dhtinspector
 Terminal=false
+StartupWMClass=DHTInspector
 Categories=Network;Development;
 Keywords=DHT;BitTorrent;Kademlia;Diagnostics;Network;

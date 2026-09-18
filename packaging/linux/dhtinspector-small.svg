@@ -1,0 +1,20 @@
+<!-- Master for 16, 22 and 24 px. Six spokes blur into a ring this small, so
+     there are four on the diagonals, one of them the gold node under
+     inspection. Everything is sized to survive at 16 px: the centre lands at
+     about 5 px across, the peers at 3 px and the spokes at 1.25 px. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="52" fill="#16191d"/>
+  <g stroke="#4a9eff" stroke-width="20" stroke-linecap="round">
+    <line x1="128" y1="128" x2="68"  y2="68"/>
+    <line x1="128" y1="128" x2="68"  y2="188"/>
+    <line x1="128" y1="128" x2="188" y2="188"/>
+  </g>
+  <line x1="128" y1="128" x2="188" y2="68" stroke="#d9a441" stroke-width="20" stroke-linecap="round"/>
+  <g fill="#4a9eff">
+    <circle cx="68"  cy="68"  r="26"/>
+    <circle cx="68"  cy="188" r="26"/>
+    <circle cx="188" cy="188" r="26"/>
+  </g>
+  <circle cx="188" cy="68" r="32" fill="#d9a441"/>
+  <circle cx="128" cy="128" r="38" fill="#e4e7ec"/>
+</svg>

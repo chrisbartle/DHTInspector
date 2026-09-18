@@ -1,0 +1,22 @@
+<!-- Master for 32 and 48 px. The orbit rings of the full icon fall below a
+     pixel at these sizes, so they are gone and everything else is heavier. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <rect width="256" height="256" rx="52" fill="#16191d"/>
+  <g stroke="#4a9eff" stroke-width="12" stroke-linecap="round">
+    <line x1="128" y1="128" x2="214" y2="128"/>
+    <line x1="128" y1="128" x2="171" y2="54"/>
+    <line x1="128" y1="128" x2="85"  y2="54"/>
+    <line x1="128" y1="128" x2="42"  y2="128"/>
+    <line x1="128" y1="128" x2="85"  y2="202"/>
+    <line x1="128" y1="128" x2="171" y2="202"/>
+  </g>
+  <g fill="#4a9eff">
+    <circle cx="171" cy="54"  r="18"/>
+    <circle cx="85"  cy="54"  r="18"/>
+    <circle cx="42"  cy="128" r="18"/>
+    <circle cx="85"  cy="202" r="18"/>
+    <circle cx="171" cy="202" r="18"/>
+  </g>
+  <circle cx="214" cy="128" r="22" fill="#d9a441"/>
+  <circle cx="128" cy="128" r="26" fill="#e4e7ec"/>
+</svg>
