@@ -174,6 +174,8 @@ private:
     qint64 m_timeouts = 0;
     qint64 m_notSent = 0;
     qint64 m_featureQueries = 0;
+    qint64 m_randomLookups = 0;
+    qint64 m_lookupsWithInventedPeers = 0;
 };
 
 } // namespace dht

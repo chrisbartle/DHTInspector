@@ -350,7 +350,9 @@ Panel {
                         { label: qsTr("Unknown query: another error"), value: "unknown-error" },
                         { label: qsTr("Unknown query: a normal reply"), value: "unknown-reply" },
                         { label: qsTr("Unknown query: no answer"), value: "unknown-none" },
-                        { label: qsTr("Lists unreachable addresses"), value: "bogons" }]
+                        { label: qsTr("Lists unreachable addresses"), value: "bogons" },
+                        { label: qsTr("Invents peers"), value: "invents-peers" },
+                        { label: qsTr("Checked, invents no peers"), value: "peers-honest" }]
                 currentIndex: indexOfValue(panel.feature)
                 Component.onCompleted: currentIndex = indexOfValue(panel.feature)
                 onCurrentValueChanged: if (currentValue !== undefined && currentValue !== panel.feature) { panel.feature = currentValue; panel.changed() }
@@ -371,7 +373,8 @@ Panel {
                         { label: qsTr("Dense subnet"), value: "subnet" },
                         { label: qsTr("Shared node ID"), value: "sharedId" },
                         { label: qsTr("Dense node IDs"), value: "denseIds" },
-                        { label: qsTr("Points to itself"), value: "self" }]
+                        { label: qsTr("Points to itself"), value: "self" },
+                        { label: qsTr("Invents peers"), value: "invents" }]
                 currentIndex: indexOfValue(panel.suspicion)
                 Component.onCompleted: currentIndex = indexOfValue(panel.suspicion)
                 onCurrentValueChanged: if (currentValue !== undefined && currentValue !== panel.suspicion) { panel.suspicion = currentValue; panel.changed() }

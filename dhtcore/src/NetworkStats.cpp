@@ -33,7 +33,7 @@ struct Accumulator
     double rttWeight = 0;
     double rttSumMs = 0;
     std::vector<double> ports = std::vector<double>(65536, 0.0);
-    std::array<FeatureTally, 6> features{};  // bep51, bep44, bep32, sendsIp, answers204, listsBogons
+    std::array<FeatureTally, 7> features{};  // bep51, bep44, bep32, sendsIp, answers204, listsBogons, inventsPeers
     double unknownOther = 0;
     double unknownOtherError = 0;
     std::vector<std::pair<quint32, double>> samples;  // BEP 51 "num", weighted
@@ -114,6 +114,7 @@ NetworkStats summarise(const Accumulator &a, const QHash<quint64, ClientInfo> &d
     s.sendsIp = a.features[3];
     s.answers204 = a.features[4];
     s.listsBogons = a.features[5];
+    s.inventsPeers = a.features[6];
     s.unknownOther = a.unknownOther;
     s.unknownOtherError = a.unknownOtherError;
     s.unroutableByProblem = a.problems;
@@ -363,6 +364,9 @@ NetworkStatsSet computeNetworkStats(const NodeCatalog &catalog, qint64 nowMs, in
                 tally(a.features[2], F::Tested32, F::Has32);
                 tally(a.features[3], F::TestedIp, F::SendsIp);
                 tally(a.features[4], F::TestedUnknown, F::Answers204);
+                // Counted once its own check has run, though a lookup may
+                // have flagged it before that.
+                tally(a.features[6], F::TestedPeers, F::InventsPeers);
                 if (e.has(F::TestedUnknown) && e.has(F::AnswersOther)) {
                     a.unknownOther += weight;
                     a.unknownOtherError += e.has(F::AnswersError) ? weight : 0;

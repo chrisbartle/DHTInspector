@@ -22,6 +22,7 @@ enum SybilSignal : quint8 {
     SharedId = 1 << 2,      // one node ID answering from several addresses
     DenseIds = 1 << 3,      // IDs packed closer than chance allows
     PointsToSelf = 1 << 4,  // lists mostly its own address or subnet
+    InventsPeers = 1 << 5,  // answered with peers for an infohash invented here
 };
 
 // Pseudo-signal for filtering: two or more signals at once.
@@ -42,7 +43,8 @@ private:
 };
 
 // Whether a node matches a signal filter (SybilSignal bits, or
-// SeveralSignals). Points-to-self is judged per node, the rest per address.
+// SeveralSignals). Points-to-self and invents-peers are judged per node,
+// the rest per address.
 bool matchesSignals(const CatalogEntry &entry, quint8 filter, const AddressSignals *suspicion);
 
 struct SuspectAddress
@@ -86,6 +88,13 @@ struct SelfPointer
     int sharePercent = 0;
 };
 
+// A node that answered with peers for an infohash this program invented.
+struct PeerInventor
+{
+    QHostAddress address;
+    quint16 port = 0;
+};
+
 struct SybilReport
 {
     // Thresholds, reported so the page can say what was looked for.
@@ -101,12 +110,14 @@ struct SybilReport
     std::vector<SharedIdGroup> sharedIds;      // most addresses first
     std::vector<DenseIdWindow> denseWindows;   // least likely first
     std::vector<SelfPointer> selfPointers;     // highest share first
+    std::vector<PeerInventor> peerInventors;   // by address
     std::vector<SuspectAddress> flagged;       // two or more signals, most first
     int flaggedCount = 0;
     int manyNodesCount = 0;
     int denseSubnetCount = 0;
     int sharedIdCount = 0;
     int selfPointerCount = 0;
+    int peerInventorCount = 0;
     int denseWindowCount = 0;
     std::shared_ptr<const AddressSignals> addressSignals;
 };

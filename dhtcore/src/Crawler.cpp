@@ -188,6 +188,7 @@ void Crawler::sampleHistory(qint64 now)
     share(M::Bep51Share, all.bep51);
     share(M::Bep44Share, all.bep44);
     share(M::SendsIpShare, all.sendsIp);
+    share(M::InventsPeersShare, all.inventsPeers);
 
     s.set(M::Flagged, st.suspicious.flaggedCount);
     s.set(M::ManyNodes, st.suspicious.manyNodesCount);
@@ -260,7 +261,12 @@ void Crawler::estimateSize()
         ++m_estimating[int(family)];
         const NodeId target = NodeId::random();
         QPointer<Crawler> self(this);
-        node->findNode(target, [self, family](const Lookup::Result &result) {
+        // get_peers rather than find_node: it returns the same nodes, so the
+        // size estimate is unchanged, and the target was invented here, so
+        // any peer that comes back is invented too. That catches the nodes
+        // which answer a bare check honestly and only invent peers for
+        // hashes they have seen a lookup ask about.
+        node->getPeers(target, [self, family](const Lookup::Result &result) {
             if (!self)
                 return;
             --self->m_estimating[int(family)];
@@ -285,6 +291,21 @@ void Crawler::recordLookup(Family family, const Lookup::Result &result)
         ids.push_back(contact.id);
     if (int(ids.size()) >= Lookup::K)
         m_size[int(family)].add(estimateNetworkSize(target, ids));
+
+    // Every target here is invented by this crawler, so a node that answered
+    // with peers made them up. The nodes that answered honestly are not
+    // marked as checked: the denominator stays the feature check, which
+    // reaches every answering node evenly, and this only ever adds to the
+    // numerator. The share is therefore a floor.
+    if (result.kind == Lookup::Kind::GetPeers) {
+        ++m_randomLookups;
+        m_lookupsWithInventedPeers += result.sightings.empty() ? 0 : 1;
+    }
+    for (const PeerSighting &sighting : result.sightings) {
+        const Slot slot = m_catalog->find(sighting.source);
+        if (slot != NodeCatalog::NoSlot)
+            m_catalog->at(slot).set(CatalogEntry::InventsPeers);
+    }
 
     const qint64 now = nowMs();
     for (const Lookup::Contact &contact : closest)
@@ -581,6 +602,13 @@ void Crawler::askFeature(Slot slot)
         method = "get";
         check = CatalogEntry::Tested44;
         withTarget();
+    } else if (!entry.has(CatalogEntry::TestedPeers)) {
+        // An infohash invented here and asked about at once: nobody can have
+        // announced it, so peers in the reply are made up.
+        method = "get_peers";
+        check = CatalogEntry::TestedPeers;
+        args.emplace("info_hash", BValue(NodeId::random().toBytes()));
+        args.emplace("want", BValue(BValue::List{BValue("n4"), BValue("n6")}));
     } else {
         method = UnknownMethod;
         check = CatalogEntry::TestedUnknown;
@@ -646,6 +674,10 @@ void Crawler::onFeatureReply(Ref ref, CatalogEntry::Flag check, const RpcReply &
         } else if (check == F::Tested44) {
             // A get for a missing item still returns a write token.
             entry.set(F::Has44, response && m.body.stringAt("token").has_value());
+        } else if (check == F::TestedPeers) {
+            // Only ever set: see CatalogEntry::InventsPeers.
+            if (response && !krpc::decodePeers(m.body.listAt("values"), entry.family()).empty())
+                entry.set(F::InventsPeers);
         } else {
             const bool is204 = !response && m.errorCode == krpc::MethodUnknown;
             entry.set(F::Answers204, is204);
@@ -712,6 +744,8 @@ CrawlSnapshot Crawler::snapshot() const
     s.outstanding = m_outstanding;
     s.featureQueries = m_featureQueries;
     s.featureWaiting = int(m_features.size());
+    s.randomLookups = m_randomLookups;
+    s.lookupsWithInventedPeers = m_lookupsWithInventedPeers;
     s.waiting = int(m_fresh.size() + m_deferred.size());
     s.batch = m_monitoring ? m_batch : 0;
     s.monitoredMs = m_monitoredMs + (m_monitoring ? now - m_monitoringSinceMs : 0);

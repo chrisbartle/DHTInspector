@@ -117,6 +117,8 @@ CrawlStatus toCrawlStatus(const dht::CrawlSnapshot &c)
     out.batch = c.batch;
     out.featureQueries = c.featureQueries;
     out.featureWaiting = c.featureWaiting;
+    out.randomLookups = c.randomLookups;
+    out.lookupsWithInventedPeers = c.lookupsWithInventedPeers;
     out.monitoredSeconds = double(c.monitoredMs) / 1000.0;
     return out;
 }
@@ -522,6 +524,7 @@ QVariantMap statsMap(const dht::NetworkStats &s, int shownClients, int shownVers
         {QStringLiteral("bep32"), feature(s.bep32)},
         {QStringLiteral("sendsIp"), feature(s.sendsIp)},
         {QStringLiteral("listsBogons"), feature(s.listsBogons)},
+        {QStringLiteral("inventsPeers"), feature(s.inventsPeers)},
         {QStringLiteral("bep51SamplesMedian"), s.bep51SamplesMedian},
         {QStringLiteral("unknown"), QVariantMap{
             {QStringLiteral("tested"), unknownTested},
@@ -680,7 +683,8 @@ QVariantList signalList(quint8 bits)
     QVariantList out;
     for (const auto &[bit, name] : {std::pair{dht::ManyNodes, "many"}, std::pair{dht::DenseSubnet, "subnet"},
                                     std::pair{dht::SharedId, "sharedId"}, std::pair{dht::DenseIds, "denseIds"},
-                                    std::pair{dht::PointsToSelf, "self"}}) {
+                                    std::pair{dht::PointsToSelf, "self"},
+                                    std::pair{dht::InventsPeers, "invents"}}) {
         if (bits & bit)
             out.append(QString::fromLatin1(name));
     }
@@ -737,6 +741,9 @@ QVariantMap suspiciousMap(const dht::SybilReport &r)
             {QStringLiteral("share"), p.sharePercent / 100.0},
         });
     }
+    QVariantList inventors;
+    for (const auto &p : r.peerInventors)
+        inventors.append(QVariantMap{{QStringLiteral("address"), dht::Endpoint(p.address, p.port).toString()}});
     return QVariantMap{
         {QStringLiteral("answeringNodes"), r.answeringNodes},
         {QStringLiteral("manyNodesAt"), dht::SybilReport::ManyNodesAt},
@@ -750,12 +757,14 @@ QVariantMap suspiciousMap(const dht::SybilReport &r)
         {QStringLiteral("sharedIdCount"), r.sharedIdCount},
         {QStringLiteral("denseWindowCount"), r.denseWindowCount},
         {QStringLiteral("selfPointerCount"), r.selfPointerCount},
+        {QStringLiteral("peerInventorCount"), r.peerInventorCount},
         {QStringLiteral("flagged"), flagged},
         {QStringLiteral("manyNodes"), many},
         {QStringLiteral("denseSubnets"), subnets},
         {QStringLiteral("sharedIds"), shared},
         {QStringLiteral("denseWindows"), windows},
         {QStringLiteral("selfPointers"), self},
+        {QStringLiteral("peerInventors"), inventors},
     };
 }
 
@@ -844,6 +853,11 @@ std::pair<quint32, quint32> featureFlags(const QString &name)
         {QStringLiteral("unknown-reply"), {F::TestedUnknown | F::AnswersOther, F::AnswersError}},
         {QStringLiteral("unknown-none"), {F::TestedUnknown, F::Answers204 | F::AnswersOther}},
         {QStringLiteral("bogons"), {F::ListsBogons, 0}},
+        // Set by a lookup too, so it does not imply the check has run; the
+        // "checked" form is the set the Optional Features share counts.
+        {QStringLiteral("invents-peers"), {F::InventsPeers, 0}},
+        {QStringLiteral("invents-peers-checked"), {F::TestedPeers | F::InventsPeers, 0}},
+        {QStringLiteral("peers-honest"), {F::TestedPeers, F::InventsPeers}},
     };
     return filters.value(name, {0, 0});
 }
@@ -860,10 +874,13 @@ quint8 suspicionFromName(const QString &name)
         return dht::DenseIds;
     if (name == QLatin1String("self"))
         return dht::PointsToSelf;
+    if (name == QLatin1String("invents"))
+        return dht::InventsPeers;
     if (name == QLatin1String("several"))
         return dht::SeveralSignals;
     if (name == QLatin1String("any"))
-        return dht::ManyNodes | dht::DenseSubnet | dht::SharedId | dht::DenseIds | dht::PointsToSelf;
+        return dht::ManyNodes | dht::DenseSubnet | dht::SharedId | dht::DenseIds | dht::PointsToSelf
+               | dht::InventsPeers;
     return 0;
 }
 
@@ -1113,6 +1130,8 @@ void DhtController::exportSummary(const QUrl &file)
         {QStringLiteral("errors"), c.errors},
         {QStringLiteral("timeouts"), c.timeouts},
         {QStringLiteral("featureChecks"), c.featureQueries},
+        {QStringLiteral("randomLookups"), c.randomLookups},
+        {QStringLiteral("lookupsWithInventedPeers"), c.lookupsWithInventedPeers},
         {QStringLiteral("scanningSeconds"), c.monitoredSeconds},
         {QStringLiteral("nodeListCap"), c.cap},
     });

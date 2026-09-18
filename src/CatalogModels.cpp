@@ -52,8 +52,10 @@ QString featureSummary(const dht::NodeListRow &row, bool detailed)
             parts << QLatin1String(c.shortName);
     }
     const QString unknown = dht::unknownQueryAnswer(row.flags);
+    const QString invents = dht::inventsPeersAnswer(row.flags);
     if (detailed) {
         parts << QStringLiteral("Unknown query: %1").arg(unknown.isEmpty() ? QStringLiteral("not checked") : unknown);
+        parts << QStringLiteral("Invents peers: %1").arg(invents.isEmpty() ? QStringLiteral("not checked") : invents);
         if (row.selfListSharePercent >= 0) {
             parts << QStringLiteral("Lists its own subnet: %1%").arg(row.selfListSharePercent);
             parts << QStringLiteral("Lists unreachable addresses: %1")
@@ -65,6 +67,8 @@ QString featureSummary(const dht::NodeListRow &row, bool detailed)
     }
     if (unknown == QLatin1String("204"))
         parts << QStringLiteral("204");
+    if (row.flags & F::InventsPeers)
+        parts << QStringLiteral("fake peers");
     return parts.join(QLatin1Char(' '));
 }
 

@@ -64,10 +64,20 @@ struct CatalogEntry
         FeatureQueued = 1u << 12,
         AnswersError = 1u << 15,
         Rejoined = 1u << 16,       // answering again after it had stopped (gone)
+        TestedPeers = 1u << 17,    // get_peers for an infohash invented on the spot
+        // Answered with peers for an infohash invented here. Nobody can hold
+        // peers for a hash that was never announced, so the node made them
+        // up. Set either by the check above or by a lookup for a random
+        // target, and never cleared once set: some nodes invent peers only
+        // for hashes they have seen searched for, and answer a fresh check
+        // honestly.
+        InventsPeers = 1u << 18,
     };
     static constexpr int TriesShift = 13;       // 2 bits: feature check attempts
-    static constexpr int SampleCountShift = 17; // 15 bits: BEP 51 "num", saturating
-    static constexpr quint32 MaxSampleCount = (1u << 15) - 1;
+    // Thirteen bits are enough: nodes cap what they store, and over a live
+    // sample of 301 answering nodes "num" ran from 5 to 2,066.
+    static constexpr int SampleCountShift = 19; // 13 bits: BEP 51 "num", saturating
+    static constexpr quint32 MaxSampleCount = (1u << 13) - 1;
 
     bool has(Flag f) const { return flags & f; }
     void set(Flag f, bool on = true) { flags = on ? (flags | f) : (flags & ~quint32(f)); }
@@ -75,7 +85,10 @@ struct CatalogEntry
     void setFeatureTries(int tries);
     quint32 sampleCount() const { return flags >> SampleCountShift; }
     void setSampleCount(qint64 count);
-    bool featuresDone() const { return has(Tested51) && has(Tested44) && has(TestedUnknown); }
+    bool featuresDone() const
+    {
+        return has(Tested51) && has(Tested44) && has(TestedPeers) && has(TestedUnknown);
+    }
 
     bool isIPv4() const;
     Family family() const { return isIPv4() ? Family::IPv4 : Family::IPv6; }

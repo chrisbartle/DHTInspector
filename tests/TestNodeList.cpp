@@ -445,7 +445,9 @@ void TestNodeList::filtersByFeatures()
     };
     entry("203.0.113.1", 6881).flags = F::Tested51 | F::Has51 | F::TestedUnknown | F::Answers204;
     entry("203.0.113.2", 6881).flags = F::Tested51 | F::TestedUnknown;
-    entry("198.51.100.9", 7000).flags = F::Tested51 | F::TestedUnknown | F::AnswersOther | F::ListsBogons;
+    entry("198.51.100.9", 7000).flags = F::Tested51 | F::TestedUnknown | F::AnswersOther | F::ListsBogons
+                                       | F::TestedPeers | F::InventsPeers;
+    entry("203.0.113.2", 6881).flags |= F::TestedPeers;
 
     NodeQuery q;
     q.flagsSet = F::Tested51 | F::Has51;
@@ -459,6 +461,11 @@ void TestNodeList::filtersByFeatures()
     q.flagsSet = F::ListsBogons;
     q.flagsClear = 0;
     QCOMPARE(addresses(run(q)), QStringList{QStringLiteral("198.51.100.9:7000")});
+    q.flagsSet = F::InventsPeers;
+    QCOMPARE(addresses(run(q)), QStringList{QStringLiteral("198.51.100.9:7000")});
+    q.flagsSet = F::TestedPeers;
+    q.flagsClear = F::InventsPeers;
+    QCOMPARE(addresses(run(q)), QStringList{QStringLiteral("203.0.113.2:6881")});
 }
 
 void TestNodeList::filtersBySuspicion()
@@ -510,6 +517,13 @@ void TestNodeList::describesFeaturesAndProblems()
     QCOMPARE(unknownQueryAnswer(F::TestedUnknown | F::Answers204), QStringLiteral("204"));
     QCOMPARE(unknownQueryAnswer(F::TestedUnknown | F::AnswersOther), QStringLiteral("reply"));
     QCOMPARE(unknownQueryAnswer(F::TestedUnknown | F::AnswersOther | F::AnswersError), QStringLiteral("other error"));
+
+    // A lookup can catch a node before its own check runs, so the flag alone
+    // is a yes.
+    QCOMPARE(inventsPeersAnswer(0), QString());
+    QCOMPARE(inventsPeersAnswer(F::TestedPeers), QStringLiteral("no"));
+    QCOMPARE(inventsPeersAnswer(F::TestedPeers | F::InventsPeers), QStringLiteral("yes"));
+    QCOMPARE(inventsPeersAnswer(F::InventsPeers), QStringLiteral("yes"));
     QCOMPARE(signalNames(ManyNodes | PointsToSelf), QStringLiteral("many nodes, points to self"));
     QCOMPARE(signalNames(0), QString());
 
@@ -557,21 +571,21 @@ void TestNodeList::describesFeaturesAndProblems()
     QFile file(path);
     QVERIFY(file.open(QIODevice::ReadOnly));
     const QList<QByteArray> lines = file.readAll().split(char(10));
-    QCOMPARE(lines[0].split(',').size(), 28);
+    QCOMPARE(lines[0].split(',').size(), 29);
     QVERIFY(lines[0].endsWith(",bep51,bep51_samples,bep44,bep32,sends_ip,unknown_query,lists_bad_addresses,"
-                              "self_list_share,suspicious,address_problem"));
+                              "invents_peers,self_list_share,suspicious,address_problem"));
     int seen = 0;
     for (const QByteArray &line : lines) {
         if (line.startsWith("203.0.113.1,")) {
-            QVERIFY2(line.endsWith(",yes,4242,no,,yes,204,yes,12,,"), line.constData());
+            QVERIFY2(line.endsWith(",yes,4242,no,,yes,204,yes,,12,,"), line.constData());
             ++seen;
         }
         if (line.startsWith("10.0.0.1,")) {
-            QVERIFY2(line.endsWith(",,,,,,,,,,Private or local"), line.constData());
+            QVERIFY2(line.endsWith(",,,,,,,,,,,Private or local"), line.constData());
             ++seen;
         }
         if (!line.isEmpty())
-            QCOMPARE(line.count(','), 27);
+            QCOMPARE(line.count(','), 28);
     }
     QCOMPARE(seen, 2);
 }

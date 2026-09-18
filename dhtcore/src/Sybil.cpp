@@ -66,6 +66,7 @@ struct Item
     quint16 port;
     quint8 selfShare;
     bool compliant;
+    bool inventsPeers;
 };
 
 struct AddressInfo
@@ -94,10 +95,12 @@ bool matchesSignals(const CatalogEntry &entry, quint8 filter, const AddressSigna
             && entry.selfListShare >= SybilReport::PointsToSelfAt)
             return true;
     }
+    if (filter & InventsPeers && entry.has(CatalogEntry::InventsPeers))
+        return true;
     const quint8 bits = suspicion ? suspicion->at(entry.address) : 0;
     if (filter & SeveralSignals && std::popcount(unsigned(bits)) >= 2)
         return true;
-    return (bits & filter & ~(PointsToSelf | SeveralSignals)) != 0;
+    return (bits & filter & ~(PointsToSelf | InventsPeers | SeveralSignals)) != 0;
 }
 
 double poissonTail(double lambda, int k)
@@ -150,7 +153,8 @@ SybilReport computeSybilReport(const NodeCatalog &catalog)
         if (e.state != CatalogEntry::State::Responsive)
             return;
         items.push_back({e.address, e.id, e.port, e.selfListShare,
-                         bep42::Status(e.bep42) == bep42::Status::Compliant});
+                         bep42::Status(e.bep42) == bep42::Status::Compliant,
+                         e.has(CatalogEntry::InventsPeers)});
     });
     report.answeringNodes = int(items.size());
     if (items.empty())
@@ -176,6 +180,10 @@ SybilReport computeSybilReport(const NodeCatalog &catalog)
                 report.selfPointers.push_back({addressOf(items[i].address), items[i].port, items[i].selfShare});
                 suspicion[info.address] |= PointsToSelf;
             }
+            if (items[i].inventsPeers) {
+                report.peerInventors.push_back({addressOf(items[i].address), items[i].port});
+                suspicion[info.address] |= InventsPeers;
+            }
         }
         std::sort(prefixes.begin(), prefixes.end());
         info.prefixes = int(std::unique(prefixes.begin(), prefixes.end()) - prefixes.begin());
@@ -185,6 +193,7 @@ SybilReport computeSybilReport(const NodeCatalog &catalog)
         begin = end;
     }
     report.selfPointerCount = int(report.selfPointers.size());
+    report.peerInventorCount = int(report.peerInventors.size());
 
     // Addresses are sorted, so a subnet's addresses are consecutive.
     for (size_t begin = 0; begin < addresses.size();) {
@@ -352,6 +361,9 @@ SybilReport computeSybilReport(const NodeCatalog &catalog)
     trim(report.sharedIds);
     trim(report.denseWindows);
     trim(report.selfPointers);
+    // Peer inventors keep catalogue order, which is by address: there is no
+    // "worse" among them, every one of them made its peers up.
+    trim(report.peerInventors);
     return report;
 }
 

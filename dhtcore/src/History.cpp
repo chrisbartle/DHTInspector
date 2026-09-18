@@ -70,6 +70,7 @@ const char *metricKey(Metric metric)
     case Metric::Bep51Share: return "bep51Share";
     case Metric::Bep44Share: return "bep44Share";
     case Metric::SendsIpShare: return "sendsIpShare";
+    case Metric::InventsPeersShare: return "inventsPeersShare";
     case Metric::Flagged: return "flagged";
     case Metric::ManyNodes: return "manyNodes";
     case Metric::DenseSubnets: return "denseSubnets";

@@ -89,6 +89,9 @@ struct NetworkStats
     double unknownOther = 0;    // answered the unknown query some other way
     double unknownOtherError = 0;  // of which with another error code
     FeatureTally listsBogons;   // tested: has listed nodes; yes: some unreachable
+    // tested: asked for an infohash invented here; yes: answered with peers
+    // for one. A floor: see CatalogEntry::InventsPeers.
+    FeatureTally inventsPeers;
     double bep51SamplesMedian = -1;  // stored infohashes, over BEP 51 addresses
 
     // Listed addresses that cannot be contacted, by reason. Port 0 counts

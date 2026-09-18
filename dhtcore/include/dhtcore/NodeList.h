@@ -143,6 +143,11 @@ NodeExport collectNodes(const NodeCatalog &catalog, const NodeQuery &query, qint
 QString featureAnswer(quint32 flags, CatalogEntry::Flag tested, CatalogEntry::Flag has);
 // The unknown-query check: "204", "other error", "reply", "no answer", or empty.
 QString unknownQueryAnswer(quint32 flags);
+
+// Whether the node has answered with peers for an infohash invented here:
+// empty until it has been asked or caught, since a lookup can catch one
+// before its own check runs.
+QString inventsPeersAnswer(quint32 flags);
 // Signal bits as text, e.g. "many nodes, dense subnet".
 QString signalNames(quint8 suspicion);
 

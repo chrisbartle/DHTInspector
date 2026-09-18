@@ -380,15 +380,17 @@ void TestNetworkStats::talliesFeaturesPerAddress()
     };
     CatalogEntry &a = entry("203.0.113.1", 6881);
     a.flags = F::Tested51 | F::Has51 | F::Tested44 | F::Has44 | F::Tested32 | F::TestedIp | F::SendsIp
-              | F::TestedUnknown | F::Answers204;
+              | F::TestedUnknown | F::Answers204 | F::TestedPeers;
     a.setSampleCount(100);
     a.selfListShare = 0;
     // An address with two nodes: each counts half.
     CatalogEntry &b1 = entry("203.0.113.2", 6881);
-    b1.flags = F::Tested51 | F::Has51 | F::TestedUnknown | F::AnswersOther | F::AnswersError | F::ListsBogons;
+    b1.flags = F::Tested51 | F::Has51 | F::TestedUnknown | F::AnswersOther | F::AnswersError | F::ListsBogons
+               | F::TestedPeers | F::InventsPeers;
     b1.setSampleCount(300);
     b1.selfListShare = 10;
-    entry("203.0.113.2", 6882).flags = F::Tested51 | F::TestedUnknown;
+    // Caught by a lookup, but its own check has not run: not counted yet.
+    entry("203.0.113.2", 6882).flags = F::Tested51 | F::TestedUnknown | F::InventsPeers;
     // .3 is not checked yet; the gone node does not count at all.
     entry("203.0.113.4", 6881).flags = F::Tested51 | F::Has51;
 
@@ -406,6 +408,8 @@ void TestNetworkStats::talliesFeaturesPerAddress()
     QCOMPARE(s.unknownOtherError, 0.5);
     QCOMPARE(s.listsBogons.tested, 1.5);
     QCOMPARE(s.listsBogons.yes, 0.5);
+    QCOMPARE(s.inventsPeers.tested, 1.5);
+    QCOMPARE(s.inventsPeers.yes, 0.5);
     // Weighted median of 100 (weight 1) and 300 (weight 0.5).
     QCOMPARE(s.bep51SamplesMedian, 100.0);
 

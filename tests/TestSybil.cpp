@@ -63,6 +63,7 @@ private slots:
     void sharedIds();
     void denseIdWindow();
     void pointsToSelf();
+    void inventsPeers();
     void flagsAddressesWithSeveralSignals();
     void filtersBySignal();
     void ignoresNodesThatDoNotAnswer();
@@ -234,6 +235,31 @@ void TestSybil::pointsToSelf()
     QCOMPARE(r.selfPointers[0].port, quint16(6881));
     QCOMPARE(r.selfPointers[0].sharePercent, 90);
     QCOMPARE(r.selfPointers[1].sharePercent, SybilReport::PointsToSelfAt);
+}
+
+void TestSybil::inventsPeers()
+{
+    NodeCatalog catalog(1000);
+    addBackground(catalog, 50);
+    addNode(catalog, QStringLiteral("198.51.100.1"), 6881).set(CatalogEntry::InventsPeers);
+    addNode(catalog, QStringLiteral("198.51.100.1"), 6882);
+    addNode(catalog, QStringLiteral("198.51.100.2"), 6881).set(CatalogEntry::InventsPeers);
+
+    const SybilReport r = computeSybilReport(catalog);
+    QCOMPARE(r.peerInventorCount, 2);
+    QCOMPARE(r.peerInventors[0].address.toString(), QStringLiteral("198.51.100.1"));
+    QCOMPARE(r.peerInventors[0].port, quint16(6881));
+    QCOMPARE(r.peerInventors[1].address.toString(), QStringLiteral("198.51.100.2"));
+    // The signal sits on the address, so it can combine with the others.
+    const Endpoint first(QHostAddress(QStringLiteral("198.51.100.1")), 6881);
+    QVERIFY(r.addressSignals->at(catalog.at(catalog.find(first)).address) & InventsPeers);
+
+    // But the node is judged on its own flag: the one sharing the address
+    // has not invented anything.
+    const Endpoint second(QHostAddress(QStringLiteral("198.51.100.1")), 6882);
+    QVERIFY(matchesSignals(catalog.at(catalog.find(first)), InventsPeers, r.addressSignals.get()));
+    QVERIFY(!matchesSignals(catalog.at(catalog.find(second)), InventsPeers, r.addressSignals.get()));
+    QVERIFY(matchesSignals(catalog.at(catalog.find(first)), InventsPeers, nullptr));
 }
 
 void TestSybil::flagsAddressesWithSeveralSignals()

@@ -777,7 +777,8 @@ ScrollView {
                 { key: "clients", label: qsTr("Clients"), format: historyPanel.formatShare, max: 0, series: [] },
                 { key: "features", label: qsTr("Features"), format: historyPanel.formatShare, max: 1,
                   series: [{ name: qsTr("BEP 42 compliant"), key: "bep42Share" }, { name: qsTr("BEP 51"), key: "bep51Share" },
-                           { name: qsTr("BEP 44"), key: "bep44Share" }, { name: qsTr("Sends ip"), key: "sendsIpShare" }] },
+                           { name: qsTr("BEP 44"), key: "bep44Share" }, { name: qsTr("Sends ip"), key: "sendsIpShare" },
+                           { name: qsTr("Invents peers"), key: "inventsPeersShare" }] },
                 { key: "suspicious", label: qsTr("Suspicious"), format: historyPanel.formatCount, max: 0,
                   series: [{ name: qsTr("Two or more signals"), key: "flagged" }, { name: qsTr("Many nodes"), key: "manyNodes" },
                            { name: qsTr("Dense subnets"), key: "denseSubnets" }, { name: qsTr("Shared IDs"), key: "sharedIds" }] },
@@ -1317,7 +1318,7 @@ ScrollView {
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignTop
                 title: qsTr("Optional Features")
-                subtitle: qsTr("Checked on every answering node with one extra query at a time: sample_infohashes (BEP 51), then get (BEP 44), then a query no DHT defines. Shares are of the addresses checked so far.")
+                subtitle: qsTr("Checked on every answering node with one extra query at a time: sample_infohashes (BEP 51), then get (BEP 44), then get_peers for an infohash invented on the spot, then a query no DHT defines. Shares are of the addresses checked so far.")
 
                 Repeater {
                     model: featuresPanel.f ? [
@@ -1335,6 +1336,33 @@ ScrollView {
                         share: Math.max(0, t.share)
                         filters: t.yes > 0 ? { feature: modelData.filter, states: ["responsive"] } : null
                     }
+                }
+
+                FieldLabel {
+                    visible: featuresPanel.f !== null
+                    Layout.topMargin: Theme.spacingSmall
+                    text: qsTr("Invented infohash")
+                }
+                ShareRow {
+                    readonly property var t: featuresPanel.f ? featuresPanel.f.inventsPeers
+                                                             : { tested: 0, yes: 0, share: -1 }
+                    visible: featuresPanel.f !== null
+                    label: page.ofChecked(qsTr("Answered with peers"), t.tested)
+                    count: t.yes
+                    share: Math.max(0, t.share)
+                    tone: t.yes > 0 ? Theme.warn : Theme.text
+                    // The counted set, so the link shows exactly this many.
+                    filters: t.yes > 0 ? { feature: "invents-peers-checked", states: ["responsive"] } : null
+                }
+                Hint {
+                    visible: featuresPanel.f !== null
+                    text: qsTr("Nobody can hold peers for an infohash invented a moment ago, so these were made up. A floor: the scan's own random-target lookups catch nodes too, but only the check above counts towards the total.")
+                }
+                Hint {
+                    visible: featuresPanel.f !== null && page.crawl.randomLookups > 0
+                    text: qsTr("These nodes are rare across the network but sit where lookups converge, so a search meets them far more often than the share suggests: %1 of %2 lookups for an invented infohash came back with peers.")
+                          .arg(page.count(page.crawl.lookupsWithInventedPeers))
+                          .arg(page.count(page.crawl.randomLookups))
                 }
 
                 FieldLabel {
@@ -1550,7 +1578,9 @@ ScrollView {
                             { view: "windows", filter: "denseIds", label: qsTr("Dense ID ranges"), count: "denseWindowCount", unit: qsTr("ranges"),
                               detail: qsTr("more IDs than chance allows") },
                             { view: "self", filter: "self", label: qsTr("Points to itself"), count: "selfPointerCount", unit: qsTr("nodes"),
-                              detail: qsTr("%1%+ of listed nodes in its own subnet").arg(suspectPanel.s.pointsToSelfAt || 0) }
+                              detail: qsTr("%1%+ of listed nodes in its own subnet").arg(suspectPanel.s.pointsToSelfAt || 0) },
+                            { view: "invents", filter: "invents", label: qsTr("Invents peers"), count: "peerInventorCount", unit: qsTr("nodes"),
+                              detail: qsTr("peers for an infohash nobody announced") }
                         ]
 
                         delegate: Rectangle {
@@ -1628,6 +1658,7 @@ ScrollView {
                         case "shared": return s.sharedIds || []
                         case "windows": return s.denseWindows || []
                         case "self": return s.selfPointers || []
+                        case "invents": return s.peerInventors || []
                         }
                         return []
                     }
@@ -1651,7 +1682,7 @@ ScrollView {
                                 font.family: Theme.monoFamily
                                 font.pixelSize: Theme.fontSizeSmall
                                 color: Theme.text
-                                visible: suspectPanel.view !== "self"
+                                visible: suspectPanel.view !== "self" && suspectPanel.view !== "invents"
                                 text: {
                                     const r = groupRow.modelData
                                     switch (suspectPanel.view) {
@@ -1664,8 +1695,9 @@ ScrollView {
                             }
                             AddressLink {
                                 Layout.preferredWidth: 330
-                                visible: suspectPanel.view === "self"
-                                address: suspectPanel.view === "self" ? groupRow.modelData.address : ""
+                                visible: suspectPanel.view === "self" || suspectPanel.view === "invents"
+                                address: (suspectPanel.view === "self" || suspectPanel.view === "invents")
+                                         ? groupRow.modelData.address : ""
                                 elide: Text.ElideMiddle
                             }
                             Label {
@@ -1690,6 +1722,8 @@ ScrollView {
                                                .arg(r.addresses).arg(r.chance < 1e-6 ? "< 1e-6" : r.chance.toExponential(1))
                                     case "self":
                                         return qsTr("%1 of the nodes it lists are in its own subnet").arg(page.percent(r.share))
+                                    case "invents":
+                                        return qsTr("answered with peers for an infohash this program invented")
                                     }
                                     return ""
                                 }
@@ -1701,6 +1735,7 @@ ScrollView {
                                     case "subnets": return { address: r.subnet }
                                     case "shared": return { idPrefix: r.id }
                                     case "windows": return { idPrefix: r.prefix }
+                                    case "invents":
                                     case "self": return { address: r.address.replace(/:\d+$/, "").replace(/^\[|\]$/g, "") }
                                     default: return { address: r.address }
                                     }

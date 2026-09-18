@@ -64,6 +64,7 @@ enum class Metric {
     Bep51Share,         // of those checked
     Bep44Share,
     SendsIpShare,
+    InventsPeersShare,  // of those checked, answered with peers for an invented infohash
     Flagged,            // addresses with two or more signals
     ManyNodes,
     DenseSubnets,

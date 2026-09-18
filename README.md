@@ -97,12 +97,20 @@ Two jobs, one tool:
   are not multiplied. Eight slices per family give a mean and a 95%
   interval.
 - Feature checks: every answering node is sent, one at a time and within
-  the same per-host limit, `sample_infohashes` (BEP 51), `get` (BEP 44) and a
-  query no DHT defines, which BEP 5 says should get error 204. The first two
-  ask for both families' nodes, which doubles as a BEP 32 check, and every
-  reply shows whether the node sends `ip` (BEP 42). A check that goes
-  unanswered twice counts as "no". The scan keeps three quarters of each
-  batch; the checks get the rest and anything the scan leaves.
+  the same per-host limit, `sample_infohashes` (BEP 51), `get` (BEP 44),
+  `get_peers` for an infohash invented on the spot, and a query no DHT
+  defines, which BEP 5 says should get error 204. The first three ask for
+  both families' nodes, which doubles as a BEP 32 check, and every reply
+  shows whether the node sends `ip` (BEP 42). A check that goes unanswered
+  twice counts as "no". The scan keeps three quarters of each batch; the
+  checks get the rest and anything the scan leaves.
+- Invented peers: nobody can hold peers for an infohash made up a moment
+  ago, so a node that answers `get_peers` with one has fabricated it. Both
+  the check above and the scan's own random-target lookups catch this; the
+  flag is never cleared, because some nodes invent peers only for hashes
+  they have seen a lookup ask about and would answer a fresh check
+  honestly. Only the check counts towards the total, so the share is a
+  floor.
 - Bad addresses: listed addresses that cannot be contacted are never
   queried, and are counted by reason: port 0, unspecified, private or local,
   multicast or broadcast, and reserved (documentation, benchmarking, shared
@@ -117,8 +125,9 @@ Two jobs, one tool:
   addresses running 5 or more nodes; /24 or /48 subnets with 8 or more
   answering addresses; one node ID answering from several addresses; ranges
   of the ID space holding more IDs than chance allows (Poisson, adjusted for
-  the number of ranges, at four depths); and nodes whose listed neighbours
-  are mostly in their own subnet. Addresses showing two or more signals are
+  the number of ranges, at four depths); nodes whose listed neighbours
+  are mostly in their own subnet; and nodes that invent peers. Addresses
+  showing two or more signals are
   listed first. Every group has a link that filters the node list to it.
 - Churn, by address (up while any node there answers): addresses that
   stopped answering, came back, or newly appeared in the last hour; the

@@ -146,6 +146,11 @@ struct CrawlSnapshot
     int batch = 0;        // queries per tick the crawler currently allows itself
     qint64 featureQueries = 0;  // feature checks sent (not in queries)
     int featureWaiting = 0;     // answering nodes with feature checks left
+    // Lookups for a target invented here, and how many came back with peers
+    // anyway. Nodes that invent peers are a tiny share of the network but
+    // sit where lookups converge, so this is the rate a search meets them.
+    qint64 randomLookups = 0;
+    qint64 lookupsWithInventedPeers = 0;
     qint64 monitoredMs = 0;
 
     // Recomputed every few seconds while scanning; shared, not copied.

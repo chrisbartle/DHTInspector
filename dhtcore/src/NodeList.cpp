@@ -295,6 +295,13 @@ QString unknownQueryAnswer(quint32 flags)
     return QStringLiteral("no answer");
 }
 
+QString inventsPeersAnswer(quint32 flags)
+{
+    if (flags & CatalogEntry::InventsPeers)
+        return QStringLiteral("yes");
+    return (flags & CatalogEntry::TestedPeers) ? QStringLiteral("no") : QString();
+}
+
 QString signalNames(quint8 suspicion)
 {
     QStringList names;
@@ -308,6 +315,8 @@ QString signalNames(quint8 suspicion)
         names << QStringLiteral("dense IDs");
     if (suspicion & PointsToSelf)
         names << QStringLiteral("points to self");
+    if (suspicion & InventsPeers)
+        names << QStringLiteral("invents peers");
     return names.join(QStringLiteral(", "));
 }
 
@@ -498,7 +507,7 @@ bool writeNodesCsv(const NodeExport &nodes, const QString &path, QString *error)
     buffer += "address,port,family,state,answered,client,version,client_kind,v_hex,rtt_ms,bep42,"
               "node_id,nodes_at_address,failures,sightings,first_seen_s_ago,last_answered_s_ago,"
               "last_queried_s_ago,bep51,bep51_samples,bep44,bep32,sends_ip,unknown_query,lists_bad_addresses,"
-              "self_list_share,suspicious,address_problem\n";
+              "invents_peers,self_list_share,suspicious,address_problem\n";
 
     ClientLabelCache labels;
     const auto seconds = [](qint64 ms) { return ms < 0 ? QByteArray() : QByteArray::number(ms / 1000); };
@@ -532,6 +541,7 @@ bool writeNodesCsv(const NodeExport &nodes, const QString &path, QString *error)
         buffer += text(featureAnswer(row.flags, CatalogEntry::TestedIp, CatalogEntry::SendsIp));
         buffer += text(unknownQueryAnswer(row.flags));
         buffer += QByteArray(listed ? ((row.flags & CatalogEntry::ListsBogons) ? "yes" : "no") : "") + ',';
+        buffer += text(inventsPeersAnswer(row.flags));
         buffer += (listed ? QByteArray::number(row.selfListSharePercent) : QByteArray()) + ',';
         buffer += csvField(signalNames(row.suspicion)) + ',';
         buffer += (row.problem == AddressProblem::None ? QByteArray() : csvField(addressProblemName(row.problem))) + '\n';

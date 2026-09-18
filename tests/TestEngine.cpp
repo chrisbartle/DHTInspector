@@ -184,6 +184,7 @@ private slots:
     void monitoringDoesNotQueueBehindABusyHost();
     void censusCountsAddressesExactly();
     void censusChoosesSlicesAndCancels();
+    void monitoringCatchesInventedPeers();
 };
 
 void TestEngine::swarmConvergesAndSharesPeers()
@@ -1203,6 +1204,7 @@ void TestEngine::monitoringDiscoversTheWholeSwarm()
         QVERIFY(e.has(F::Tested32) && !e.has(F::Has32));
         QVERIFY(e.has(F::TestedIp) && e.has(F::SendsIp));
         QVERIFY(e.has(F::Answers204) && !e.has(F::AnswersOther));
+        QVERIFY(e.has(F::TestedPeers) && !e.has(F::InventsPeers));
         QVERIFY(!e.has(F::FeatureQueued));
         QVERIFY(e.selfListShare != F::NoShare);
         QVERIFY(!e.has(F::ListsBogons));
@@ -1215,9 +1217,11 @@ void TestEngine::monitoringDiscoversTheWholeSwarm()
     QCOMPARE(features->all.bep32.yes, 0.0);
     QCOMPARE(features->all.sendsIp.yes, double(N));
     QCOMPARE(features->all.answers204.yes, double(N));
+    QCOMPARE(features->all.inventsPeers.tested, double(N));
+    QCOMPARE(features->all.inventsPeers.yes, 0.0);
     QCOMPARE(features->all.bep51SamplesMedian, 0.0);
     QCOMPARE(monitor->snapshot().crawl.featureWaiting, 0);
-    QVERIFY(monitor->snapshot().crawl.featureQueries >= 3 * N);
+    QVERIFY(monitor->snapshot().crawl.featureQueries >= 4 * N);
     // All on 127.0.0.x: one dense subnet, and every node lists only it.
     QCOMPARE(features->suspicious.denseSubnetCount, 1);
     QCOMPARE(features->suspicious.selfPointerCount, N);
@@ -1633,6 +1637,92 @@ void TestEngine::censusChoosesSlicesAndCancels()
     // Shutting down discards it.
     counter->shutdown();
     QCOMPARE(counter->snapshot().census.state, CensusSnapshot::State::Idle);
+}
+
+
+// Nobody can hold peers for an infohash invented a moment ago, so a node
+// that answers get_peers with one has made it up. The check catches it, the
+// statistics count it and it is listed as suspicious.
+void TestEngine::monitoringCatchesInventedPeers()
+{
+    constexpr int N = 3;
+    auto chain = startChain(N);
+    QCOMPARE(int(chain.size()), N);
+
+    // Answers everything, and names a peer the first time it is asked for
+    // one: either the scan's own random-target lookup or the check itself
+    // catches that, and every later answer is honest, so the flag has to
+    // stay set once it is on.
+    QUdpSocket inventor;
+    QVERIFY(inventor.bind(QHostAddress(QHostAddress::LocalHost), 0));
+    const NodeId inventorId = NodeId::random();
+    const Endpoint madeUp(QHostAddress(QStringLiteral("203.0.113.7")), 51413);
+    bool invented = false;
+    connect(&inventor, &QUdpSocket::readyRead, this, [&] {
+        while (inventor.hasPendingDatagrams()) {
+            const QNetworkDatagram d = inventor.receiveDatagram();
+            const auto parsed = krpc::parse(d.data());
+            if (!parsed.message || parsed.message->type != krpc::MessageType::Query)
+                continue;
+            BValue::Dict values;
+            values.emplace("id", BValue(inventorId.toBytes()));
+            if (parsed.message->method == "get_peers") {
+                values.emplace("token", BValue(QByteArray("tok")));
+                if (!invented) {
+                    invented = true;
+                    values.emplace("values", BValue(BValue::List{BValue(madeUp.toCompact())}));
+                }
+            }
+            inventor.writeDatagram(krpc::encodeResponse(parsed.message->transactionId, values, {}, Endpoint()),
+                                   d.senderAddress(), quint16(d.senderPort()));
+        }
+    });
+    const Endpoint inventorEndpoint(QHostAddress(QHostAddress::LocalHost), inventor.localPort());
+
+    auto monitor = startEngineWith(monitorConfig());
+    QVERIFY(monitor);
+    introduce(*monitor, *chain.back());
+    monitor->addNode(QStringLiteral("127.0.0.1"), inventor.localPort());
+    QTRY_VERIFY_WITH_TIMEOUT(nodeCount(*monitor) >= 2, 5000);
+    monitor->setMonitoring(true);
+
+    using F = CatalogEntry;
+    const auto flagged = [&] {
+        const auto slot = monitor->catalog().find(inventorEndpoint);
+        return slot != NodeCatalog::NoSlot && monitor->catalog().at(slot).has(F::InventsPeers);
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(flagged(), 20000);
+
+    // Every answering node is checked, including this one, whose later
+    // answers are honest. The flag stays on.
+    const auto checked = [&] {
+        int done = 0;
+        monitor->catalog().forEach([&](NodeCatalog::Slot, const CatalogEntry &e) {
+            done += e.state == CatalogEntry::State::Responsive && e.has(F::TestedPeers) ? 1 : 0;
+        });
+        return done;
+    };
+    QTRY_COMPARE_WITH_TIMEOUT(checked(), N + 1, 20000);
+    QVERIFY(flagged());
+    monitor->catalog().forEach([&](NodeCatalog::Slot, const CatalogEntry &e) {
+        if (e.endpoint() != inventorEndpoint && e.state == CatalogEntry::State::Responsive)
+            QVERIFY(!e.has(F::InventsPeers));
+    });
+
+    QTRY_VERIFY_WITH_TIMEOUT(monitor->snapshot().crawl.stats
+                                 && monitor->snapshot().crawl.stats->all.inventsPeers.yes == 1.0,
+                             15000);
+    const auto stats = monitor->snapshot().crawl.stats;
+    QCOMPARE(stats->all.inventsPeers.tested, double(N + 1));
+    QCOMPARE(stats->suspicious.peerInventorCount, 1);
+    QCOMPARE(int(stats->suspicious.peerInventors.size()), 1);
+    QCOMPARE(stats->suspicious.peerInventors[0].port, inventor.localPort());
+
+    // The scan's own random-target lookups are counted, so the page can say
+    // how often a search meets one of these nodes.
+    QVERIFY(monitor->snapshot().crawl.randomLookups > 0);
+    QVERIFY(monitor->snapshot().crawl.lookupsWithInventedPeers
+            <= monitor->snapshot().crawl.randomLookups);
 }
 
 #include "TestEngine.moc"
