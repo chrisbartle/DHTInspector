@@ -180,7 +180,27 @@ endif()
 
 # Runtime deployment only makes sense against a shared Qt. The static Windows
 # build links everything into the executable and needs no deploy step.
-if(QT6_IS_SHARED_LIBS_BUILD)
+#
+# On Linux it is linuxdeploy that assembles the AppImage, and it bundles Qt
+# itself, so running Qt's step as well does the same work twice. Worse, Qt's
+# step rewrites each plugin's RUNPATH in place, which fails outright on any
+# plugin whose existing entry is shorter than the path being written:
+#
+#   file RPATH_SET could not write new RPATH ... to
+#   plugins/wayland-decoration-client/libadwaita.so
+#   The replacement path is too long for the RUNPATH entry.
+#
+# linuxdeploy patches with patchelf, which rewrites the section rather than
+# overwriting it, so it has no such limit. Leave Linux to it.
+if(UNIX AND NOT APPLE)
+    set(deploy_by_default OFF)
+else()
+    set(deploy_by_default ON)
+endif()
+option(DHTINSPECTOR_QT_DEPLOY
+    "Run Qt's own deployment step at install time" ${deploy_by_default})
+
+if(QT6_IS_SHARED_LIBS_BUILD AND DHTINSPECTOR_QT_DEPLOY)
     qt_generate_deploy_qml_app_script(
         TARGET DHTInspector
         OUTPUT_SCRIPT deploy_script
