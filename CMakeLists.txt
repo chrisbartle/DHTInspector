@@ -127,6 +127,16 @@ qt_add_resources(DHTInspector "appicons"
 # from here, and every number in it is substituted from project() above so
 # the version lives in exactly one place.
 if(WIN32)
+    # VERSIONINFO wants four numbers. project() may give three, in which case
+    # PROJECT_VERSION_TWEAK is empty, so fill it in rather than hard-coding a
+    # fourth field that a four-part version would then contradict.
+    set(tweak "${PROJECT_VERSION_TWEAK}")
+    if(tweak STREQUAL "")
+        set(tweak 0)
+    endif()
+    set(DHTINSPECTOR_VERSION_COMMAS
+        "${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},${tweak}")
+
     # A backslash path would be an escape sequence to the resource compiler.
     file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/dhtinspector.ico"
          DHTINSPECTOR_ICON_PATH)

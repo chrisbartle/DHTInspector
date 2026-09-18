@@ -1,0 +1,100 @@
+# Builds the Linux AppImage and, for a tag, publishes it as a release.
+#
+# Run it by hand from the Actions tab to exercise everything except the
+# publishing step; push a v* tag to publish.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # the release step creates a release and uploads to it
+
+env:
+  QT_VERSION: 6.10.1
+  # The runners carry no libfuse2, so the AppImage tools have to unpack
+  # themselves rather than mount.
+  APPIMAGE_EXTRACT_AND_RUN: 1
+
+jobs:
+  appimage:
+    # Deliberately not ubuntu-latest. An AppImage runs only on a glibc at
+    # least as new as the one it was built against, so the oldest supported
+    # runner is the one that reaches the most distributions.
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag against the project version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          project=$(sed -n '/^project(/,/^)/ s/^[[:space:]]*VERSION[[:space:]]\+\([0-9.]\+\).*/\1/p' CMakeLists.txt | head -1)
+          tag=${GITHUB_REF_NAME#v}
+          # Compare major.minor.patch only: project() may carry a fourth
+          # field that a tag would not normally spell out.
+          trim() { cut -d. -f1-3 <<<"$1"; }
+          if [ "$(trim "$tag")" != "$(trim "$project")" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the project version $project in CMakeLists.txt"
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches project version $project"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            libgl1-mesa-dev \
+            libxkbcommon-dev libxkbcommon-x11-0 \
+            libx11-xcb-dev libxcb1-dev libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \
+            libfontconfig1-dev libfreetype6-dev
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          host: linux
+          target: desktop
+          arch: linux_gcc_64
+          cache: true
+
+      - name: Fetch linuxdeploy
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$HOME/.local/bin/linuxdeploy" \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fsSL -o "$HOME/.local/bin/linuxdeploy-plugin-qt" \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x "$HOME/.local/bin/linuxdeploy" "$HOME/.local/bin/linuxdeploy-plugin-qt"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build and package
+        run: ./packaging/linux/build-appimage.sh
+
+      - name: Test
+        # Nothing here needs a display, and the engine suite binds loopback
+        # sockets only.
+        run: ctest --test-dir build-appimage --output-on-failure
+
+      - name: Keep the AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "DHT Inspector ${GITHUB_REF_NAME#v}" \
+            --generate-notes \
+            dist/*.AppImage

@@ -247,7 +247,24 @@ Requires `linuxdeploy` and `linuxdeploy-plugin-qt` on `PATH`:
 
 The script configures with `CMAKE_INSTALL_PREFIX=/usr`, installs into an
 `AppDir`, and points the Qt plugin at `qml/` via `QML_SOURCES_PATHS` so it can
-resolve imports and bundle the right Qt QML modules.
+resolve imports and bundle the right Qt QML modules. The AppImage lands in
+`dist/`, named for the version that `project()` declares; set `VERSION` in the
+environment to override that.
+
+## Releases
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the
+AppImage on the oldest supported Ubuntu runner, runs the tests, and publishes
+a GitHub release with the AppImage attached. The job refuses to run if the tag
+disagrees with the version in `CMakeLists.txt`, so the two cannot drift:
+
+```bash
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+The same workflow can be started by hand from the Actions tab, which does
+everything except publish, so the pipeline can be exercised without cutting a
+release.
 
 ## Notes
 

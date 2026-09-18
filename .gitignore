@@ -1,6 +1,7 @@
 build/
 build-*/
 AppDir/
+dist/
 *.AppImage
 .qtcreator/
 CMakeLists.txt.user*
