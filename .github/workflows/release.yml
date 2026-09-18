@@ -14,7 +14,10 @@ permissions:
   contents: write # the release step creates a release and uploads to it
 
 env:
-  QT_VERSION: 6.10.1
+  # The 6.11 series, newest patch release of it. Pin the patch as well if a
+  # rebuild of an old tag has to produce the same binary.
+  QT_VERSION: "6.11.*"
+
   # The runners carry no libfuse2, so the AppImage tools have to unpack
   # themselves rather than mount.
   APPIMAGE_EXTRACT_AND_RUN: 1

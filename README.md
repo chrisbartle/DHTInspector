@@ -268,7 +268,8 @@ release.
 
 ## Notes
 
-- Qt 6.5 is the declared minimum; 6.10.1 is what this is developed against.
+- Qt 6.5 is the declared minimum. Releases are built against the 6.11 series;
+  6.10.1 is the static build used for Windows here.
 - The Controls style is pinned to **Basic** in `main.cpp`, and everything
   visual comes from `Theme.qml`, so Windows and Linux render identically.
   (A static build links every Controls style; Basic is a choice for
