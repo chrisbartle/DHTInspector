@@ -1,5 +1,8 @@
 * text=auto
 
+# Never let line-ending conversion near the icons.
+*.png     binary
+
 # Executed or parsed on Linux; a CRLF here breaks the shebang or the entry.
 *.sh      text eol=lf
 *.desktop text eol=lf
