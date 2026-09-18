@@ -220,8 +220,9 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-Gateway discovery on Linux reads `/proc/net/route`. That code path has not yet
-been compiled or run on Linux.
+Gateway discovery on Linux reads `/proc/net/route`. That code path compiles on
+Linux but has not been run there: port forwarding is off by default, so
+nothing has exercised it.
 
 ## Tests
 
