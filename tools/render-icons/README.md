@@ -30,3 +30,16 @@ done
 Which master feeds which size is the point of the exercise: the full drawing
 has 1 px detail that disappears below about 64, so smaller sizes come from
 drawings with fewer elements and heavier strokes.
+
+## The Windows icon
+
+One `.ico` holds every size. Entries below 128 px are written as DIBs,
+which anything can read; 128 and 256 are PNG, which the shell has read
+since Vista and which keeps the file to about 65 KB instead of 250 KB.
+
+```bash
+../../tools/render-icons/build/render-icons --ico ../windows/dhtinspector.ico     dhtinspector-small.svg  16     dhtinspector-small.svg  20     dhtinspector-small.svg  24     dhtinspector-medium.svg 32     dhtinspector-medium.svg 40     dhtinspector-medium.svg 48     dhtinspector.svg        64     dhtinspector.svg        128     dhtinspector.svg        256
+```
+
+20 and 40 are there for the 125% and 250% display scale factors, which
+Windows draws without resampling if the size is present.

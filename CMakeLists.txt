@@ -123,6 +123,27 @@ qt_add_resources(DHTInspector "appicons"
     FILES ${icon_files}
 )
 
+# The Windows version resource. Explorer reads the icon and the Details tab
+# from here, and every number in it is substituted from project() above so
+# the version lives in exactly one place.
+if(WIN32)
+    set(DHTINSPECTOR_COMPANY "Chris Bartle" CACHE STRING
+        "CompanyName in the Windows version resource")
+    set(DHTINSPECTOR_COPYRIGHT "Copyright (C) 2026 Chris Bartle" CACHE STRING
+        "LegalCopyright in the Windows version resource")
+
+    # A backslash path would be an escape sequence to the resource compiler.
+    file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/dhtinspector.ico"
+         DHTINSPECTOR_ICON_PATH)
+
+    configure_file(
+        packaging/windows/dhtinspector.rc.in
+        "${CMAKE_CURRENT_BINARY_DIR}/dhtinspector.rc"
+        @ONLY
+    )
+    target_sources(DHTInspector PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/dhtinspector.rc")
+endif()
+
 # ---------------------------------------------------------------------------
 # Install rules. These exist mainly so `cmake --install` can populate an
 # AppDir for the Linux AppImage; see packaging/linux/build-appimage.sh.
