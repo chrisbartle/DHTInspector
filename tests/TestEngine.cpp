@@ -483,18 +483,24 @@ void TestEngine::bep42Setting()
     // Three fake nodes on distinct loopback addresses, all answering every
     // query with "you are 203.0.113.50". A public address is not exempt.
     std::vector<std::unique_ptr<QUdpSocket>> fakes;
+    // Counted so a failure can say whether the queries ever arrived, which
+    // is the difference between the engine not asking and the answers not
+    // being counted. Sized up front: the lambdas hold pointers into it.
+    std::vector<int> answered(3, 0);
     for (int i = 2; i <= 4; ++i) {
         auto fake = std::make_unique<QUdpSocket>();
         if (!fake->bind(QHostAddress(QStringLiteral("127.0.0.%1").arg(i)), 0))
             QSKIP("Cannot bind additional loopback addresses on this platform");
         QUdpSocket *socket = fake.get();
         const NodeId fakeId = NodeId::random();
-        connect(socket, &QUdpSocket::readyRead, this, [socket, fakeId, external] {
+        int *count = &answered[size_t(i - 2)];
+        connect(socket, &QUdpSocket::readyRead, this, [socket, fakeId, external, count] {
             while (socket->hasPendingDatagrams()) {
                 const QNetworkDatagram datagram = socket->receiveDatagram();
                 const auto parsed = krpc::parse(datagram.data());
                 if (!parsed.message || parsed.message->type != krpc::MessageType::Query)
                     continue;
+                ++*count;
                 BValue::Dict values;
                 values.emplace("id", BValue(fakeId.toBytes()));
                 socket->writeDatagram(datagram.makeReply(
@@ -506,7 +512,15 @@ void TestEngine::bep42Setting()
     }
 
     // The address is learned either way.
-    QTRY_COMPARE_WITH_TIMEOUT(node->externalAddress(), external, 5000);
+    const bool learned =
+        QTest::qWaitFor([&] { return node->externalAddress() == external; }, 5000);
+    QVERIFY2(learned,
+             qPrintable(QStringLiteral("external address is %1, not %2; the three fake nodes were asked %3, %4 and %5 "
+                                       "queries")
+                            .arg(node->externalAddress().toString(), external.toString())
+                            .arg(answered[0])
+                            .arg(answered[1])
+                            .arg(answered[2])));
 
     if (enabled) {
         QTRY_VERIFY_WITH_TIMEOUT(node->id() != initial, 2000);
