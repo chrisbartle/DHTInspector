@@ -126,17 +126,23 @@ jobs:
           set /p VSPATH=<"%TEMP%\vs.txt"
           call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
 
-          mkdir C:\qt-src || exit /b 1
-          cd C:\qt-src
+          rem Absolute paths throughout: the workspace is on another drive,
+          rem and a bare "cd C:\..." would change directory there without
+          rem switching to it. --strip-components drops the archive's own
+          rem top-level folder, so the source path never has to spell out
+          rem the version.
+          mkdir C:\qt-src
           for %%m in (qtbase qtshadertools qtdeclarative) do (
-            curl -fsSL -o %%m.zip https://download.qt.io/archive/qt/6.11/%QT_VERSION%/submodules/%%m-everywhere-src-%QT_VERSION%.zip || exit /b 1
-            tar -xf %%m.zip || exit /b 1
+            curl -fsSL -o C:\qt-src\%%m.zip https://download.qt.io/archive/qt/6.11/%QT_VERSION%/submodules/%%m-everywhere-src-%QT_VERSION%.zip || exit /b 1
+            mkdir C:\qt-src\%%m || exit /b 1
+            tar -xf C:\qt-src\%%m.zip -C C:\qt-src\%%m --strip-components=1 || exit /b 1
           )
+          dir C:\qt-src
 
           rem BUILD_SHARED_LIBS=OFF gives a static Qt; static_runtime links
           rem the MSVC runtime in as well, so the .exe needs no
           rem redistributable alongside it.
-          cmake -S C:\qt-src\qtbase-everywhere-src-%QT_VERSION% -B C:\qt-src\b-qtbase -G Ninja ^
+          cmake -S C:\qt-src\qtbase -B C:\qt-src\b-qtbase -G Ninja ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DBUILD_SHARED_LIBS=OFF ^
             -DFEATURE_static_runtime=ON ^
@@ -147,7 +153,7 @@ jobs:
 
           rem Qt Quick needs the shader tools, so they come first.
           for %%m in (qtshadertools qtdeclarative) do (
-            cmake -S C:\qt-src\%%m-everywhere-src-%QT_VERSION% -B C:\qt-src\b-%%m -G Ninja ^
+            cmake -S C:\qt-src\%%m -B C:\qt-src\b-%%m -G Ninja ^
               -DCMAKE_BUILD_TYPE=Release ^
               -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF ^
               -DCMAKE_PREFIX_PATH=C:\Qt-static ^
