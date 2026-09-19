@@ -1,4 +1,5 @@
-# Builds the Linux AppImage and, for a tag, publishes it as a release.
+# Builds the Linux AppImage and the static Windows .exe and, for a tag,
+# publishes both as a release.
 #
 # Run it by hand from the Actions tab to exercise everything except the
 # publishing step; push a v* tag to publish.
@@ -11,24 +12,22 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # the release step creates a release and uploads to it
+  contents: write # the release job creates a release and uploads to it
 
 env:
-  # The 6.11 series, newest patch release of it. Pin the patch as well if a
-  # rebuild of an old tag has to produce the same binary.
-  QT_VERSION: "6.11.*"
-
+  # Pinned rather than a 6.11.* range: the Windows job builds Qt from
+  # source, which needs an exact version, and a release that can be rebuilt
+  # from its tag is worth more than picking up patch releases silently.
+  QT_VERSION: "6.11.2"
   # The runners carry no libfuse2, so the AppImage tools have to unpack
   # themselves rather than mount.
   APPIMAGE_EXTRACT_AND_RUN: 1
 
 jobs:
-  appimage:
-    # Deliberately not ubuntu-latest. An AppImage runs only on a glibc at
-    # least as new as the one it was built against, so the oldest supported
-    # runner is the one that reaches the most distributions.
+  # Cheap, and first: a mismatched tag should not cost an hour of Windows
+  # runner time before anyone notices.
+  check:
     runs-on: ubuntu-22.04
-
     steps:
       - uses: actions/checkout@v7
 
@@ -45,6 +44,16 @@ jobs:
             exit 1
           fi
           echo "tag $GITHUB_REF_NAME matches project version $project"
+
+  appimage:
+    needs: check
+    # Deliberately not ubuntu-latest. An AppImage runs only on a glibc at
+    # least as new as the one it was built against, so the oldest supported
+    # runner is the one that reaches the most distributions.
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: |
@@ -92,12 +101,120 @@ jobs:
           path: dist/*.AppImage
           if-no-files-found: error
 
+  windows:
+    needs: check
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Qt publishes no static binaries for Windows, so this builds one. It
+      # is the slow part of the job by a wide margin, and the only reason
+      # the cache exists. A hit makes the step below disappear entirely.
+      - name: Restore the static Qt build
+        id: qt-cache
+        uses: actions/cache@v6
+        with:
+          path: C:\Qt-static
+          key: qt-static-${{ env.QT_VERSION }}-windows-2022-msvc
+
+      - name: Build static Qt
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        shell: cmd
+        run: |
+          call "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath > "%TEMP%\vs.txt"
+          set /p VSPATH=<"%TEMP%\vs.txt"
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+
+          mkdir C:\qt-src || exit /b 1
+          cd C:\qt-src
+          for %%m in (qtbase qtshadertools qtdeclarative) do (
+            curl -fsSL -o %%m.zip https://download.qt.io/archive/qt/6.11/%QT_VERSION%/submodules/%%m-everywhere-src-%QT_VERSION%.zip || exit /b 1
+            tar -xf %%m.zip || exit /b 1
+          )
+
+          rem BUILD_SHARED_LIBS=OFF gives a static Qt; static_runtime links
+          rem the MSVC runtime in as well, so the .exe needs no
+          rem redistributable alongside it.
+          cmake -S C:\qt-src\qtbase-everywhere-src-%QT_VERSION% -B C:\qt-src\b-qtbase -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DBUILD_SHARED_LIBS=OFF ^
+            -DFEATURE_static_runtime=ON ^
+            -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF ^
+            -DCMAKE_INSTALL_PREFIX=C:\Qt-static || exit /b 1
+          cmake --build C:\qt-src\b-qtbase --parallel || exit /b 1
+          cmake --install C:\qt-src\b-qtbase || exit /b 1
+
+          rem Qt Quick needs the shader tools, so they come first.
+          for %%m in (qtshadertools qtdeclarative) do (
+            cmake -S C:\qt-src\%%m-everywhere-src-%QT_VERSION% -B C:\qt-src\b-%%m -G Ninja ^
+              -DCMAKE_BUILD_TYPE=Release ^
+              -DQT_BUILD_EXAMPLES=OFF -DQT_BUILD_TESTS=OFF ^
+              -DCMAKE_PREFIX_PATH=C:\Qt-static ^
+              -DCMAKE_INSTALL_PREFIX=C:\Qt-static || exit /b 1
+            cmake --build C:\qt-src\b-%%m --parallel || exit /b 1
+            cmake --install C:\qt-src\b-%%m || exit /b 1
+          )
+
+      - name: Build
+        shell: cmd
+        run: |
+          call "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath > "%TEMP%\vs.txt"
+          set /p VSPATH=<"%TEMP%\vs.txt"
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          cmake -S . -B build\win-static -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_PREFIX_PATH=C:\Qt-static || exit /b 1
+          cmake --build build\win-static || exit /b 1
+
+      - name: Test
+        run: ctest --test-dir build\win-static --output-on-failure
+
+      - name: Name the executable for the version it reports
+        shell: pwsh
+        run: |
+          $cache = Get-Content build\win-static\CMakeCache.txt
+          $version = ($cache | Select-String -Pattern '^CMAKE_PROJECT_VERSION:STATIC=(.+)$').Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build\win-static\DHTInspector.exe "dist\DHT_Inspector-$version-windows-x64.exe"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: List what the executable needs
+        shell: cmd
+        # It should want nothing but Windows itself. Printing the imports
+        # means a stray dependency shows up here rather than on somebody's
+        # machine.
+        run: |
+          call "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath > "%TEMP%\vs.txt"
+          set /p VSPATH=<"%TEMP%\vs.txt"
+          call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
+          dumpbin /DEPENDENTS dist\*.exe
+
+      - name: Keep the executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  release:
+    needs: [appimage, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Publish the release
-        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          ls -l dist
           gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "DHT Inspector ${GITHUB_REF_NAME#v}" \
             --generate-notes \
-            dist/*.AppImage
+            dist/*.AppImage dist/*.exe

@@ -254,9 +254,10 @@ environment to override that.
 ## Releases
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the
-AppImage on the oldest supported Ubuntu runner, runs the tests, and publishes
-a GitHub release with the AppImage attached. The job refuses to run if the tag
-disagrees with the version in `CMakeLists.txt`, so the two cannot drift:
+Linux AppImage and the static Windows `.exe`, runs the tests on both, and
+publishes a GitHub release with the two attached. The tag is checked against
+the version in `CMakeLists.txt` before anything is built, so the two cannot
+drift:
 
 ```bash
 git tag v1.0.0 && git push origin v1.0.0
@@ -265,6 +266,18 @@ git tag v1.0.0 && git push origin v1.0.0
 The same workflow can be started by hand from the Actions tab, which does
 everything except publish, so the pipeline can be exercised without cutting a
 release.
+
+The AppImage is built on the oldest supported Ubuntu runner, because an
+AppImage runs only on a glibc at least as new as the one it was built
+against.
+
+The Windows job builds Qt from source, since Qt publishes no static binaries
+for Windows and the point of that build is an executable that needs nothing
+beside it. That takes the best part of an hour, so the result is cached
+against the Qt version; a cache hit skips it entirely. GitHub drops caches
+untouched for a week, so an occasional release pays the build again. The job
+prints the finished executable's imports, which should be Windows system
+libraries and nothing else.
 
 ## Notes
 
