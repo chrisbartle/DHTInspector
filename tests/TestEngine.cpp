@@ -489,9 +489,8 @@ void TestEngine::bep42Setting()
     struct FakeLog
     {
         QString bound;
-        QString destination;  // as the datagram reports it
         int queries = 0;
-        qint64 sent = -2;     // what writeDatagram returned
+        qint64 sent = -2;  // what writeDatagram returned
         QString error;
     };
     std::vector<FakeLog> log(3);
@@ -510,11 +509,18 @@ void TestEngine::bep42Setting()
                 if (!parsed.message || parsed.message->type != krpc::MessageType::Query)
                     continue;
                 ++entry->queries;
-                entry->destination = datagram.destinationAddress().toString();
                 BValue::Dict values;
                 values.emplace("id", BValue(fakeId.toBytes()));
-                entry->sent = socket->writeDatagram(datagram.makeReply(
-                    krpc::encodeResponse(parsed.message->transactionId, std::move(values), {}, Endpoint(external, 6881))));
+                // Reply the way DhtNode does, by addressing the sender and
+                // letting the socket's own binding pick the source.
+                // makeReply() instead pins the source address and the
+                // incoming interface index onto the datagram, which a
+                // secondary loopback address survives on Windows and not on
+                // Linux: the send reports success and nothing arrives.
+                entry->sent = socket->writeDatagram(
+                    krpc::encodeResponse(parsed.message->transactionId, std::move(values), {},
+                                         Endpoint(external, 6881)),
+                    datagram.senderAddress(), quint16(datagram.senderPort()));
                 if (entry->sent < 0)
                     entry->error = socket->errorString();
             }
@@ -529,12 +535,11 @@ void TestEngine::bep42Setting()
     if (!learned) {
         QStringList detail;
         for (const FakeLog &f : log) {
-            detail << QStringLiteral("bound %1, asked %2, reply returned %3%4, datagram destination %5")
+            detail << QStringLiteral("bound %1, asked %2, reply returned %3%4")
                           .arg(f.bound)
                           .arg(f.queries)
                           .arg(f.sent)
-                          .arg(f.error.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(f.error),
-                               f.destination.isEmpty() ? QStringLiteral("(none)") : f.destination);
+                          .arg(f.error.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(f.error));
         }
         QFAIL(qPrintable(QStringLiteral("external address is %1, not %2; the engine holds %3 nodes. %4")
                              .arg(node->externalAddress().toString(), external.toString())
