@@ -483,28 +483,40 @@ void TestEngine::bep42Setting()
     // Three fake nodes on distinct loopback addresses, all answering every
     // query with "you are 203.0.113.50". A public address is not exempt.
     std::vector<std::unique_ptr<QUdpSocket>> fakes;
-    // Counted so a failure can say whether the queries ever arrived, which
-    // is the difference between the engine not asking and the answers not
-    // being counted. Sized up front: the lambdas hold pointers into it.
-    std::vector<int> answered(3, 0);
+    // Recorded so a failure can say which half broke: whether the queries
+    // arrived, and whether the answers actually left. Sized up front: the
+    // lambdas hold pointers into it.
+    struct FakeLog
+    {
+        QString bound;
+        QString destination;  // as the datagram reports it
+        int queries = 0;
+        qint64 sent = -2;     // what writeDatagram returned
+        QString error;
+    };
+    std::vector<FakeLog> log(3);
     for (int i = 2; i <= 4; ++i) {
         auto fake = std::make_unique<QUdpSocket>();
         if (!fake->bind(QHostAddress(QStringLiteral("127.0.0.%1").arg(i)), 0))
             QSKIP("Cannot bind additional loopback addresses on this platform");
         QUdpSocket *socket = fake.get();
         const NodeId fakeId = NodeId::random();
-        int *count = &answered[size_t(i - 2)];
-        connect(socket, &QUdpSocket::readyRead, this, [socket, fakeId, external, count] {
+        FakeLog *entry = &log[size_t(i - 2)];
+        entry->bound = socket->localAddress().toString();
+        connect(socket, &QUdpSocket::readyRead, this, [socket, fakeId, external, entry] {
             while (socket->hasPendingDatagrams()) {
                 const QNetworkDatagram datagram = socket->receiveDatagram();
                 const auto parsed = krpc::parse(datagram.data());
                 if (!parsed.message || parsed.message->type != krpc::MessageType::Query)
                     continue;
-                ++*count;
+                ++entry->queries;
+                entry->destination = datagram.destinationAddress().toString();
                 BValue::Dict values;
                 values.emplace("id", BValue(fakeId.toBytes()));
-                socket->writeDatagram(datagram.makeReply(
+                entry->sent = socket->writeDatagram(datagram.makeReply(
                     krpc::encodeResponse(parsed.message->transactionId, std::move(values), {}, Endpoint(external, 6881))));
+                if (entry->sent < 0)
+                    entry->error = socket->errorString();
             }
         });
         engine->addNode(socket->localAddress().toString(), socket->localPort());
@@ -514,13 +526,21 @@ void TestEngine::bep42Setting()
     // The address is learned either way.
     const bool learned =
         QTest::qWaitFor([&] { return node->externalAddress() == external; }, 5000);
-    QVERIFY2(learned,
-             qPrintable(QStringLiteral("external address is %1, not %2; the three fake nodes were asked %3, %4 and %5 "
-                                       "queries")
-                            .arg(node->externalAddress().toString(), external.toString())
-                            .arg(answered[0])
-                            .arg(answered[1])
-                            .arg(answered[2])));
+    if (!learned) {
+        QStringList detail;
+        for (const FakeLog &f : log) {
+            detail << QStringLiteral("bound %1, asked %2, reply returned %3%4, datagram destination %5")
+                          .arg(f.bound)
+                          .arg(f.queries)
+                          .arg(f.sent)
+                          .arg(f.error.isEmpty() ? QString() : QStringLiteral(" (%1)").arg(f.error),
+                               f.destination.isEmpty() ? QStringLiteral("(none)") : f.destination);
+        }
+        QFAIL(qPrintable(QStringLiteral("external address is %1, not %2; the engine holds %3 nodes. %4")
+                             .arg(node->externalAddress().toString(), external.toString())
+                             .arg(nodeCount(*engine))
+                             .arg(detail.join(QStringLiteral(" | ")))));
+    }
 
     if (enabled) {
         QTRY_VERIFY_WITH_TIMEOUT(node->id() != initial, 2000);
