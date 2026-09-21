@@ -5,6 +5,9 @@ own and lets you look at the network two ways: interrogate a single node in
 detail, or survey the whole network and measure its health. Built with C++20
 and Qt 6, for Windows and Linux.
 
+*DHT Inspector was written almost entirely by Claude Opus under human
+supervision.*
+
 ## Download
 
 Each [release](https://github.com/chrisbartle/DHTInspector/releases) has two
@@ -28,11 +31,13 @@ files:
    - **Global Health** scans the network once **Monitoring** is switched on,
      and reports its size, clients, supported features, churn, lookup
      performance and suspicious groups, with charts over time and a
-     filterable node list that can be exported.
+     filterable node list that can be exported. *Warning: Enabling the
+     Monitor option on this tab may overwhelm the local router as well as
+     upstream routers and may even cause the ISP to flag the connect as
+     hacked. It is highly recommended that the Send Limit in the **Setup**
+     tab to used to prevent overloads!*
    - **Data Store** shows what other nodes have announced to this one, and
      the BEP 44 items stored with it.
-
-Hashes and addresses throughout have a copy button beside them.
 
 Nothing is saved between runs: every launch starts with the engine off,
 default settings and fresh node IDs, and files are only written when you
