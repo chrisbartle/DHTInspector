@@ -189,6 +189,8 @@ ScrollView {
             FieldLabel { text: qsTr("External IP") }
 
             Label {
+                id: externalIp
+
                 readonly property bool known: block.live && block.status.externalAddress !== ""
 
                 Layout.fillWidth: true
@@ -207,6 +209,12 @@ ScrollView {
                         return qsTr("Not derived yet: waiting for other nodes to agree")
                     return block.status.externalAddress
                 }
+            }
+
+            CopyButton {
+                visible: externalIp.known
+                value: block.status.externalAddress
+                what: qsTr("external IP")
             }
         }
 
@@ -465,6 +473,14 @@ ScrollView {
                             return qsTr("%1:%2 via %3").arg(m.externalAddress).arg(m.externalPort).arg(m.protocol)
                         return m.message
                     }
+                }
+
+                CopyButton {
+                    readonly property var m: DhtController.portMapping
+                    visible: DhtController.portForwarding && page.running
+                             && m.state === "mapped" && m.externalAddress !== ""
+                    value: visible ? m.externalAddress + ":" + m.externalPort : ""
+                    what: qsTr("forwarded address")
                 }
             }
         }

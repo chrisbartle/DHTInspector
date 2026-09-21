@@ -47,6 +47,7 @@ ScrollView {
         property string value
         property color tone: Theme.text
         property bool mono: true
+        property bool copyable: false
 
         Layout.fillWidth: true
         spacing: Theme.spacing
@@ -60,6 +61,12 @@ ScrollView {
             font.pixelSize: Theme.fontSizeSmall
             font.family: resultRow.mono ? Theme.monoFamily : Qt.application.font.family
             wrapMode: resultRow.mono ? Text.WrapAnywhere : Text.WordWrap
+        }
+
+        CopyButton {
+            visible: resultRow.copyable && resultRow.value !== ""
+            value: resultRow.value
+            what: resultRow.label.toLowerCase()
         }
     }
 
@@ -246,10 +253,17 @@ ScrollView {
             Layout.fillWidth: true
             title: qsTr("Exchange")
             subtitle: DhtController.probe.valid
-                      ? qsTr("%1 to %2 at %3").arg(DhtController.probe.method)
-                        .arg(DhtController.probe.endpoint).arg(DhtController.probe.time)
+                      ? qsTr("%1 at %2").arg(DhtController.probe.method).arg(DhtController.probe.time)
                       : qsTr("Whatever the node sends back appears here, decoded in full.")
 
+            // Its own row rather than part of the subtitle, so it can be
+            // copied.
+            ResultRow {
+                label: qsTr("Node")
+                value: DhtController.probe.endpoint
+                visible: DhtController.probe.valid
+                copyable: true
+            }
             ResultRow {
                 label: qsTr("Outcome")
                 value: DhtController.probe.valid ? DhtController.probe.outcome : qsTr("nothing asked yet")

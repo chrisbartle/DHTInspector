@@ -447,7 +447,12 @@ ScrollView {
                             anchors.rightMargin: Theme.spacingSmall
                             spacing: Theme.spacingSmall
 
-                            Cell { text: peerRow.address; font.family: Theme.monoFamily }
+                            AddressLink {
+                                Layout.fillWidth: true
+                                address: peerRow.address
+                                probeable: false
+                                elide: Text.ElideMiddle
+                            }
                             Cell { cellWidth: 70; text: peerRow.family; color: Theme.textDim }
                             Cell { cellWidth: 110; text: peerRow.announced; color: Theme.textDim }
                             Cell {

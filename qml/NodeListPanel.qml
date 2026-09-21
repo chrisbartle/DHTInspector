@@ -513,7 +513,7 @@ Panel {
 
     // --- the table -----------------------------------------------------------
     readonly property var columns: [
-        { title: qsTr("Address"), width: 230 },
+        { title: qsTr("Address"), width: Theme.addressCellWidth },
         { title: qsTr("Status"), width: 90 },
         { title: qsTr("Client"), width: 0 },
         { title: qsTr("Round trip"), width: 80 },

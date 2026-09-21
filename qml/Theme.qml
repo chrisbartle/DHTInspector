@@ -3,6 +3,8 @@ pragma Singleton
 import QtQuick
 
 QtObject {
+    id: theme
+
     // Surfaces
     readonly property color background:  "#16191d"
     readonly property color surface:     "#1e2228"
@@ -40,6 +42,19 @@ QtObject {
     readonly property string monoFamily: Qt.platform.os === "windows" ? "Consolas"
                                        : Qt.platform.os === "osx"     ? "Menlo"
                                                                       : "monospace"
+
+    // The widest an address can be in the monospace font at the small size:
+    // a full IPv6 endpoint. Measured rather than assumed, because the
+    // monospace font differs by platform, so a column sized from it never
+    // cuts an address short. Real IPv6 addresses often run close to this.
+    readonly property TextMetrics addressMetrics: TextMetrics {
+        font.family: theme.monoFamily
+        font.pixelSize: theme.fontSizeSmall
+        text: "[ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:65535"
+    }
+    readonly property int addressWidth: Math.ceil(theme.addressMetrics.advanceWidth) + 2
+    // With the copy button every shown address carries beside it.
+    readonly property int addressCellWidth: theme.addressWidth + 22
 
     // Binary units, like the byte totals: "512 B/s", "1.5 KiB/s", "16 KiB/s".
     function formatRate(bytesPerSecond) {

@@ -1677,7 +1677,9 @@ ScrollView {
                             spacing: Theme.spacing
 
                             Label {
-                                Layout.preferredWidth: 330
+                                id: groupText
+
+                                Layout.preferredWidth: Theme.addressWidth
                                 elide: Text.ElideMiddle
                                 font.family: Theme.monoFamily
                                 font.pixelSize: Theme.fontSizeSmall
@@ -1693,16 +1695,18 @@ ScrollView {
                                     }
                                 }
                             }
-                            // An ID prefix pastes straight into the node
-                            // list's prefix filter.
+                            // Copies whatever the column shows. An ID prefix
+                            // pastes straight into the node list's prefix
+                            // filter.
                             CopyButton {
-                                visible: suspectPanel.view === "shared" || suspectPanel.view === "windows"
-                                value: suspectPanel.view === "shared" ? groupRow.modelData.id
-                                       : suspectPanel.view === "windows" ? groupRow.modelData.prefix : ""
-                                what: suspectPanel.view === "shared" ? qsTr("node ID") : qsTr("ID prefix")
+                                visible: groupText.visible
+                                value: groupText.text
+                                what: suspectPanel.view === "shared" ? qsTr("node ID")
+                                      : suspectPanel.view === "windows" ? qsTr("ID prefix")
+                                      : suspectPanel.view === "subnets" ? qsTr("subnet") : qsTr("address")
                             }
                             AddressLink {
-                                Layout.preferredWidth: 330
+                                Layout.preferredWidth: Theme.addressCellWidth
                                 visible: suspectPanel.view === "self" || suspectPanel.view === "invents"
                                 address: (suspectPanel.view === "self" || suspectPanel.view === "invents")
                                          ? groupRow.modelData.address : ""

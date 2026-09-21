@@ -236,7 +236,7 @@ ScrollView {
                         anchors.rightMargin: Theme.spacingSmall
                         spacing: Theme.spacingSmall
 
-                        Cell { cellWidth: 200; text: qsTr("Peer"); color: Theme.textDim; font.weight: Font.DemiBold }
+                        Cell { cellWidth: Theme.addressCellWidth; text: qsTr("Peer"); color: Theme.textDim; font.weight: Font.DemiBold }
                         Cell { text: qsTr("Returned by"); color: Theme.textDim; font.weight: Font.DemiBold }
                         Cell { cellWidth: 70; text: qsTr("Nodes"); color: Theme.textDim; font.weight: Font.DemiBold }
                     }
@@ -277,7 +277,12 @@ ScrollView {
                             anchors.rightMargin: Theme.spacingSmall
                             spacing: Theme.spacingSmall
 
-                            Cell { cellWidth: 200; text: peerRow.peer; font.family: Theme.monoFamily }
+                            AddressLink {
+                                Layout.preferredWidth: Theme.addressCellWidth
+                                address: peerRow.peer
+                                probeable: false
+                                elide: Text.ElideMiddle
+                            }
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 4
