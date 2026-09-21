@@ -98,7 +98,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: appimage
-          path: dist/*.AppImage
+          path: dist/DHTInspector-x86_64.AppImage
           if-no-files-found: error
 
   windows:
@@ -176,13 +176,14 @@ jobs:
       - name: Test
         run: ctest --test-dir build\win-static --output-on-failure
 
-      - name: Name the executable for the version it reports
+      # No version in the name, so a link to the latest release's download
+      # never changes. The version is in the file's own properties, from the
+      # resource script.
+      - name: Stage the executable
         shell: pwsh
         run: |
-          $cache = Get-Content build\win-static\CMakeCache.txt
-          $version = ($cache | Select-String -Pattern '^CMAKE_PROJECT_VERSION:STATIC=(.+)$').Matches[0].Groups[1].Value
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item build\win-static\DHTInspector.exe "dist\DHT_Inspector-$version-windows-x64.exe"
+          Copy-Item build\win-static\DHTInspector.exe dist\DHTInspector-x64.exe
           Get-ChildItem dist | Format-Table Name, Length
 
       - name: List what the executable needs
@@ -194,13 +195,13 @@ jobs:
           call "%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath > "%TEMP%\vs.txt"
           set /p VSPATH=<"%TEMP%\vs.txt"
           call "%VSPATH%\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
-          dumpbin /DEPENDENTS dist\*.exe
+          dumpbin /DEPENDENTS dist\DHTInspector-x64.exe
 
       - name: Keep the executable
         uses: actions/upload-artifact@v7
         with:
           name: windows
-          path: dist/*.exe
+          path: dist/DHTInspector-x64.exe
           if-no-files-found: error
 
   release:
@@ -219,8 +220,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           ls -l dist
+          # Named outright rather than globbed: a missing or misnamed file
+          # should stop the release, not shrink it.
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "DHT Inspector ${GITHUB_REF_NAME#v}" \
             --generate-notes \
-            dist/*.AppImage dist/*.exe
+            dist/DHTInspector-x86_64.AppImage \
+            dist/DHTInspector-x64.exe

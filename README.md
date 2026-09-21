@@ -248,14 +248,24 @@ Requires `linuxdeploy` and `linuxdeploy-plugin-qt` on `PATH`:
 The script configures with `CMAKE_INSTALL_PREFIX=/usr`, installs into an
 `AppDir`, and points the Qt plugin at `qml/` via `QML_SOURCES_PATHS` so it can
 resolve imports and bundle the right Qt QML modules. The AppImage lands in
-`dist/`, named for the version that `project()` declares; set `VERSION` in the
-environment to override that.
+`dist/` as `DHTInspector-x86_64.AppImage`. The version is recorded inside it,
+from `project()`; set `VERSION` in the environment to override that.
 
 ## Releases
 
 Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the
 Linux AppImage and the static Windows `.exe`, runs the tests on both, and
-publishes a GitHub release with the two attached. The tag is checked against
+publishes a GitHub release with the two attached, as
+`DHTInspector-x86_64.AppImage` and `DHTInspector-x64.exe`. The names carry no
+version, so a link to the newest release's files stays the same from one
+release to the next:
+
+```
+https://github.com/chrisbartle/DHTInspector/releases/latest/download/DHTInspector-x64.exe
+```
+
+The version is in each file instead: the executable's properties, and the
+AppImage's embedded desktop entry. The tag is checked against
 the version in `CMakeLists.txt` before anything is built, so the two cannot
 drift:
 

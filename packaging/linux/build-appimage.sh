@@ -6,9 +6,11 @@
 # development install that CMake can find (set CMAKE_PREFIX_PATH if it is
 # not in a standard location).
 #
-# The AppImage lands in dist/. Its name carries the version, which comes
-# from project() in the top-level CMakeLists.txt unless VERSION is already
-# set in the environment.
+# The AppImage lands in dist/ as DHTInspector-x86_64.AppImage. The name
+# carries no version, so a link to the latest release's download never
+# changes; the version goes into the AppImage's own desktop entry instead,
+# from project() in the top-level CMakeLists.txt unless VERSION is set in
+# the environment.
 #
 set -euo pipefail
 
@@ -29,12 +31,13 @@ cmake --build "$BUILD"
 
 DESTDIR="$APPDIR" cmake --install "$BUILD"
 
-# linuxdeploy puts $VERSION in the file name. Take it from the build we just
-# configured, so the name cannot drift from what the binary reports.
+# Take the version from the build we just configured, so what the AppImage
+# records cannot drift from what the binary reports.
 if [[ -z "${VERSION:-}" ]]; then
     VERSION="$(sed -n 's/^CMAKE_PROJECT_VERSION:STATIC=//p' "$BUILD/CMakeCache.txt")"
-    export VERSION
 fi
+export LINUXDEPLOY_OUTPUT_VERSION="$VERSION"
+export LDAI_OUTPUT="DHTInspector-x86_64.AppImage"
 echo "Packaging version ${VERSION:-unknown}"
 
 # The Qt plugin needs to know where our QML lives so it can resolve imports
@@ -47,5 +50,10 @@ linuxdeploy \
     --plugin qt \
     --output appimage
 
-echo "AppImage written to:"
-ls -1 "$DIST"/*.AppImage
+# An older plugin that ignored LDAI_OUTPUT would name the file itself, and
+# the release would then quietly publish the wrong thing.
+if [[ ! -f "$DIST/$LDAI_OUTPUT" ]]; then
+    echo "expected $DIST/$LDAI_OUTPUT, which linuxdeploy did not produce" >&2
+    exit 1
+fi
+echo "AppImage written to $DIST/$LDAI_OUTPUT"
