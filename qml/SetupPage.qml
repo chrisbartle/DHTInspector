@@ -160,6 +160,11 @@ ScrollView {
                 onTextChanged: if (text !== block.nodeId) block.nodeIdEdited(text)
             }
 
+            CopyButton {
+                value: block.nodeId
+                what: qsTr("%1 node ID").arg(block.family)
+            }
+
             ThemedButton {
                 Accessible.name: qsTr("Randomize %1 node ID").arg(block.family)
                 text: qsTr("Randomize")
@@ -654,7 +659,16 @@ ScrollView {
                                 address: row.address
                                 elide: Text.ElideMiddle
                             }
-                            Cell { cellWidth: page.columns[1].width; text: row.nodeIdShort; font.family: Theme.monoFamily; color: Theme.textDim }
+                            RowLayout {
+                                Layout.preferredWidth: page.columns[1].width
+                                spacing: 2
+                                Cell { text: row.nodeIdShort; font.family: Theme.monoFamily; color: Theme.textDim }
+                                // The whole ID, not the shortened one shown.
+                                CopyButton {
+                                    value: row.nodeId
+                                    what: qsTr("node ID")
+                                }
+                            }
                             Cell { cellWidth: page.columns[2].width; text: row.status; color: Theme.nodeStatusColor(row.status) }
                             Cell { cellWidth: page.columns[3].width; text: row.rtt >= 0 ? qsTr("%1 ms").arg(row.rtt) : "—"; color: Theme.textDim }
                             Cell { cellWidth: page.columns[4].width; text: row.lastSeen; color: Theme.textDim }

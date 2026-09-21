@@ -5,8 +5,10 @@
 #include "dhtcore/DhtEngine.h"
 #include "dhtcore/Support.h"
 
+#include <QClipboard>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QGuiApplication>
 #include <QHostInfo>
 #include <QJsonDocument>
 #include <QLocale>
@@ -1586,6 +1588,11 @@ QString DhtController::validateHash(const QString &text) const
 QString DhtController::randomHash() const
 {
     return dht::NodeId::random().toHex();
+}
+
+void DhtController::copyToClipboard(const QString &text) const
+{
+    QGuiApplication::clipboard()->setText(text);
 }
 
 void DhtController::searchPeers(const QString &hash)

@@ -656,15 +656,23 @@ Panel {
                     text: row.firstSeen
                     color: Theme.textDim
                 }
-                Cell {
-                    cellWidth: panel.columns[8].width
-                    text: row.nodeIdShort
-                    font.family: Theme.monoFamily
-                    color: Theme.textDim
-                    ToolTip.visible: idHover.hovered
-                    ToolTip.delay: 500
-                    ToolTip.text: row.nodeId
-                    HoverHandler { id: idHover }
+                RowLayout {
+                    Layout.preferredWidth: panel.columns[8].width
+                    spacing: 2
+                    Cell {
+                        text: row.nodeIdShort
+                        font.family: Theme.monoFamily
+                        color: Theme.textDim
+                        ToolTip.visible: idHover.hovered
+                        ToolTip.delay: 500
+                        ToolTip.text: row.nodeId
+                        HoverHandler { id: idHover }
+                    }
+                    // The whole ID, not the shortened one shown beside it.
+                    CopyButton {
+                        value: row.nodeId
+                        what: qsTr("node ID")
+                    }
                 }
                 Cell {
                     cellWidth: panel.columns[9].width

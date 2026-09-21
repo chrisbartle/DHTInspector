@@ -1693,6 +1693,14 @@ ScrollView {
                                     }
                                 }
                             }
+                            // An ID prefix pastes straight into the node
+                            // list's prefix filter.
+                            CopyButton {
+                                visible: suspectPanel.view === "shared" || suspectPanel.view === "windows"
+                                value: suspectPanel.view === "shared" ? groupRow.modelData.id
+                                       : suspectPanel.view === "windows" ? groupRow.modelData.prefix : ""
+                                what: suspectPanel.view === "shared" ? qsTr("node ID") : qsTr("ID prefix")
+                            }
                             AddressLink {
                                 Layout.preferredWidth: 330
                                 visible: suspectPanel.view === "self" || suspectPanel.view === "invents"

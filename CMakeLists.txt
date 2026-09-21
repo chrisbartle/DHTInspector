@@ -66,6 +66,7 @@ qt_add_qml_module(DHTInspector
         qml/Panel.qml
         qml/Badge.qml
         qml/AddressLink.qml
+        qml/CopyButton.qml
         qml/ThemedButton.qml
         qml/ThemedSwitch.qml
         qml/ThemedSlider.qml

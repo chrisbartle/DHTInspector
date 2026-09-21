@@ -229,6 +229,9 @@ public:
     Q_INVOKABLE QVariantMap generateKeyPair() const;
     Q_INVOKABLE QString immutableTargetFor(const QString &text) const;
     Q_INVOKABLE QString mutableTargetFor(const QString &publicKeyHex, const QString &salt) const;
+    // For the copy buttons beside hashes: Qt Quick has no clipboard of its
+    // own.
+    Q_INVOKABLE void copyToClipboard(const QString &text) const;
 
     // Probe tab: one query to one node, whatever the method.
     Q_INVOKABLE void probeNode(const QString &address, const QString &method, const QString &hashHex);

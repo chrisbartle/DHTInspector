@@ -10,6 +10,14 @@ ScrollView {
     readonly property bool running: DhtController.running
     readonly property int labelWidth: 150
 
+    // "Use in search" fills the fields at the top of the page from a panel
+    // well below them, so bring them back into view; otherwise the button
+    // looks as if it did nothing.
+    function showSearchFields() {
+        page.contentItem.contentY = 0
+        hashField.forceActiveFocus()
+    }
+
     contentWidth: availableWidth
     padding: Theme.spacingLarge
     clip: true
@@ -42,6 +50,9 @@ ScrollView {
         property string label
         property string value
         property bool mono: true
+        // Hashes get a copy button; the long ones are elided, so it is the
+        // only way to get them out whole.
+        property bool copyable: false
 
         Layout.fillWidth: true
         spacing: Theme.spacing
@@ -57,6 +68,12 @@ ScrollView {
             elide: Text.ElideRight
             wrapMode: Text.WrapAnywhere
             maximumLineCount: 2
+        }
+
+        CopyButton {
+            visible: resultRow.copyable
+            value: resultRow.value
+            what: resultRow.label.toLowerCase()
         }
     }
 
@@ -310,12 +327,12 @@ ScrollView {
                           .arg(DhtController.itemSearch.responded)
 
             ResultRow { label: qsTr("Kind"); value: DhtController.itemSearch.isMutable ? qsTr("mutable") : qsTr("immutable"); visible: DhtController.itemSearch.found; mono: false }
-            ResultRow { label: qsTr("Target"); value: DhtController.itemSearch.target; visible: DhtController.itemSearch.target !== "" }
+            ResultRow { label: qsTr("Target"); value: DhtController.itemSearch.target; visible: DhtController.itemSearch.target !== ""; copyable: true }
             ResultRow { label: qsTr("Value"); value: DhtController.itemSearch.value; visible: DhtController.itemSearch.found }
             ResultRow { label: qsTr("Bencoded"); value: DhtController.itemSearch.rawValue; visible: DhtController.itemSearch.found }
             ResultRow { label: qsTr("Sequence"); value: DhtController.itemSearch.sequence; visible: DhtController.itemSearch.isMutable }
-            ResultRow { label: qsTr("Public key"); value: DhtController.itemSearch.publicKey; visible: DhtController.itemSearch.isMutable }
-            ResultRow { label: qsTr("Signature"); value: DhtController.itemSearch.signature; visible: DhtController.itemSearch.isMutable }
+            ResultRow { label: qsTr("Public key"); value: DhtController.itemSearch.publicKey; visible: DhtController.itemSearch.isMutable; copyable: true }
+            ResultRow { label: qsTr("Signature"); value: DhtController.itemSearch.signature; visible: DhtController.itemSearch.isMutable; copyable: true }
 
             Label {
                 Layout.fillWidth: true
@@ -349,6 +366,11 @@ ScrollView {
             }
 
             RowLayout {
+                id: immutableRow
+
+                readonly property string target: valueField.text.length > 0
+                                                 ? DhtController.immutableTargetFor(valueField.text) : ""
+
                 Layout.fillWidth: true
                 spacing: Theme.spacing
 
@@ -356,12 +378,29 @@ ScrollView {
 
                 Label {
                     Layout.fillWidth: true
-                    text: valueField.text.length > 0 ? DhtController.immutableTargetFor(valueField.text)
-                                                     : qsTr("— enter a value —")
-                    color: valueField.text.length > 0 ? Theme.text : Theme.textFaint
+                    text: immutableRow.target !== "" ? immutableRow.target : qsTr("— enter a value —")
+                    color: immutableRow.target !== "" ? Theme.text : Theme.textFaint
                     font.pixelSize: Theme.fontSizeSmall
                     font.family: Theme.monoFamily
                     elide: Text.ElideRight
+                }
+
+                CopyButton {
+                    value: immutableRow.target
+                    what: qsTr("immutable target")
+                }
+
+                // Fetching an immutable item takes no salt, so clear any left
+                // over from a mutable one.
+                ThemedButton {
+                    text: qsTr("Use in search")
+                    Accessible.name: qsTr("Put the immutable target in the search field")
+                    enabled: immutableRow.target !== ""
+                    onClicked: {
+                        hashField.text = immutableRow.target
+                        saltField.text = ""
+                        page.showSearchFields()
+                    }
                 }
 
                 ThemedButton {
@@ -444,14 +483,37 @@ ScrollView {
                 }
 
                 Label {
+                    id: mutableTarget
+
+                    readonly property string target: publicKeyField.text.length > 0
+                                                     ? DhtController.mutableTargetFor(publicKeyField.text, publishSalt.text)
+                                                     : ""
+
                     Layout.fillWidth: true
-                    text: publicKeyField.text.length > 0
-                          ? DhtController.mutableTargetFor(publicKeyField.text, publishSalt.text)
-                          : qsTr("— target appears once a key is set —")
-                    color: publicKeyField.text.length > 0 ? Theme.text : Theme.textFaint
+                    text: mutableTarget.target !== "" ? mutableTarget.target
+                                                      : qsTr("— target appears once a key is set —")
+                    color: mutableTarget.target !== "" ? Theme.text : Theme.textFaint
                     font.pixelSize: Theme.fontSizeSmall
                     font.family: Theme.monoFamily
                     elide: Text.ElideRight
+                }
+
+                CopyButton {
+                    value: mutableTarget.target
+                    what: qsTr("mutable target")
+                }
+
+                // A mutable item is only verified against the salt it was
+                // published under, so the salt goes along with the target.
+                ThemedButton {
+                    text: qsTr("Use in search")
+                    Accessible.name: qsTr("Put the mutable target and its salt in the search fields")
+                    enabled: mutableTarget.target !== ""
+                    onClicked: {
+                        hashField.text = mutableTarget.target
+                        saltField.text = publishSalt.text
+                        page.showSearchFields()
+                    }
                 }
 
                 ThemedButton {
