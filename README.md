@@ -35,7 +35,7 @@ files:
      Monitor option on this tab may overwhelm the local router as well as
      upstream routers and may even cause the ISP to flag the connect as
      hacked. It is highly recommended that the Send Limit in the **Setup**
-     tab to used to prevent overloads!*
+     tab is used to prevent overloads!*
    - **Data Store** shows what other nodes have announced to this one, and
      the BEP 44 items stored with it.
 
