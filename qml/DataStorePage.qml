@@ -224,8 +224,8 @@ ScrollView {
                         HoverHandler { id: hover }
                         TapHandler {
                             onTapped: (eventPoint) => {
-                                const p = copyInfohash.mapFromItem(infohashRow, eventPoint.position)
-                                if (!copyInfohash.contains(p))
+                                const button = infohashText.copyButton
+                                if (!button.contains(button.mapFromItem(infohashRow, eventPoint.position)))
                                     DhtController.selectInfohash(infohashRow.infohash)
                             }
                         }
@@ -245,10 +245,10 @@ ScrollView {
                             anchors.rightMargin: Theme.spacingSmall
                             spacing: Theme.spacingSmall
 
-                            Cell { text: infohashRow.infohash; font.family: Theme.monoFamily }
-                            CopyButton {
-                                id: copyInfohash
-                                value: infohashRow.infohash
+                            CopyableText {
+                                id: infohashText
+                                Layout.fillWidth: true
+                                text: infohashRow.infohash
                                 what: qsTr("infohash")
                             }
                             Cell { cellWidth: 70; text: String(infohashRow.peerCount); color: Theme.textDim }
@@ -289,7 +289,7 @@ ScrollView {
                 TableHeader {
                     titles: [
                         { title: qsTr("Kind"), width: 90 },
-                        { title: qsTr("Target"), width: 290 },
+                        { title: qsTr("Target"), width: Theme.hashCellWidth },
                         { title: qsTr("Value"), width: 0 },
                         { title: qsTr("Bytes"), width: 60 },
                         { title: qsTr("Seq"), width: 60 },
@@ -346,14 +346,10 @@ ScrollView {
                                 text: itemRow.kind
                                 color: itemRow.kind === "mutable" ? Theme.accent : Theme.textDim
                             }
-                            RowLayout {
-                                Layout.preferredWidth: 290
-                                spacing: 2
-                                Cell { text: itemRow.target; font.family: Theme.monoFamily }
-                                CopyButton {
-                                    value: itemRow.target
-                                    what: qsTr("target")
-                                }
+                            CopyableText {
+                                Layout.preferredWidth: Theme.hashCellWidth
+                                text: itemRow.target
+                                what: qsTr("target")
                             }
                             Cell { text: itemRow.value; font.family: Theme.monoFamily }
                             Cell { cellWidth: 60; text: String(itemRow.valueSize); color: Theme.textDim }
@@ -362,19 +358,12 @@ ScrollView {
                             // Mutable items only. A key is 64 hex digits, too wide for
                             // the column, so it shows the start and the button copies
                             // the whole key.
-                            RowLayout {
+                            CopyableText {
                                 Layout.preferredWidth: 130
-                                spacing: 2
-                                Cell {
-                                    text: itemRow.publicKey !== "" ? itemRow.publicKey.slice(0, 12) + "\u2026" : "\u2014"
-                                    color: Theme.textDim
-                                    font.family: Theme.monoFamily
-                                }
-                                CopyButton {
-                                    visible: itemRow.publicKey !== ""
-                                    value: itemRow.publicKey
-                                    what: qsTr("public key")
-                                }
+                                text: itemRow.publicKey !== "" ? itemRow.publicKey.slice(0, 12) + "\u2026" : "\u2014"
+                                value: itemRow.publicKey
+                                color: Theme.textDim
+                                what: qsTr("public key")
                             }
                             Cell {
                                 cellWidth: 100

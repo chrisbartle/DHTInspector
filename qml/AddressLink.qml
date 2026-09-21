@@ -17,6 +17,10 @@ RowLayout {
     readonly property bool active: root.address !== ""
     readonly property bool linked: root.active && root.probeable
 
+    // A layout nested in another one fills the spare width unless told
+    // otherwise, which pushed the columns after it out of line with their
+    // headers. Call sites that want a filling column say so.
+    Layout.fillWidth: false
     spacing: 2
 
     function probe() {
@@ -24,8 +28,8 @@ RowLayout {
             DhtController.openProbe(root.address)
     }
 
+    // At its natural width, so the copy button sits right against it.
     Label {
-        Layout.fillWidth: true
         text: root.address
         elide: root.elide
         color: root.linked ? (hover.hovered ? Qt.lighter(Theme.accent, 1.25) : Theme.accent)
@@ -58,4 +62,6 @@ RowLayout {
         value: root.address
         what: qsTr("address")
     }
+
+    Item { Layout.fillWidth: true }
 }

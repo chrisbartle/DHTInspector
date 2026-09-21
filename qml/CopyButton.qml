@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 
 // A small button that puts `value` on the clipboard. It sits beside a hash
 // rather than making the hash itself clickable, because several hashes live
@@ -15,6 +16,9 @@ AbstractButton {
 
     implicitWidth: 20
     implicitHeight: 20
+    // In a tight row the text should give way, not the button.
+    Layout.minimumWidth: implicitWidth
+    Layout.maximumWidth: implicitWidth
     padding: 0
     hoverEnabled: true
     enabled: control.value !== ""

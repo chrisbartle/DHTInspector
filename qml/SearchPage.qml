@@ -61,6 +61,7 @@ ScrollView {
 
         Label {
             Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
             text: resultRow.value
             color: Theme.text
             font.pixelSize: Theme.fontSizeSmall
@@ -75,6 +76,8 @@ ScrollView {
             value: resultRow.value
             what: resultRow.label.toLowerCase()
         }
+
+        Item { Layout.fillWidth: true }
     }
 
     ColumnLayout {
@@ -383,6 +386,7 @@ ScrollView {
 
                 Label {
                     Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
                     text: immutableRow.target !== "" ? immutableRow.target : qsTr("— enter a value —")
                     color: immutableRow.target !== "" ? Theme.text : Theme.textFaint
                     font.pixelSize: Theme.fontSizeSmall
@@ -394,6 +398,8 @@ ScrollView {
                     value: immutableRow.target
                     what: qsTr("immutable target")
                 }
+
+                Item { Layout.fillWidth: true }
 
                 // Fetching an immutable item takes no salt, so clear any left
                 // over from a mutable one.
@@ -495,6 +501,7 @@ ScrollView {
                                                      : ""
 
                     Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
                     text: mutableTarget.target !== "" ? mutableTarget.target
                                                       : qsTr("— target appears once a key is set —")
                     color: mutableTarget.target !== "" ? Theme.text : Theme.textFaint
@@ -507,6 +514,8 @@ ScrollView {
                     value: mutableTarget.target
                     what: qsTr("mutable target")
                 }
+
+                Item { Layout.fillWidth: true }
 
                 // A mutable item is only verified against the salt it was
                 // published under, so the salt goes along with the target.

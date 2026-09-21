@@ -194,6 +194,7 @@ ScrollView {
                 readonly property bool known: block.live && block.status.externalAddress !== ""
 
                 Layout.fillWidth: true
+                Layout.maximumWidth: implicitWidth
                 font.pixelSize: Theme.fontSizeSmall
                 font.family: known ? Theme.monoFamily : Qt.application.font.family
                 color: known ? Theme.text : block.live || page.running ? Theme.textDim : Theme.textFaint
@@ -216,6 +217,8 @@ ScrollView {
                 value: block.status.externalAddress
                 what: qsTr("external IP")
             }
+
+            Item { Layout.fillWidth: true }
         }
 
         RowLayout {
@@ -462,6 +465,7 @@ ScrollView {
                 }
 
                 Hint {
+                    Layout.maximumWidth: implicitWidth
                     color: DhtController.portMapping.state === "failed" ? Theme.bad : Theme.textFaint
                     text: {
                         if (!DhtController.portForwarding)
@@ -482,6 +486,8 @@ ScrollView {
                     value: visible ? m.externalAddress + ":" + m.externalPort : ""
                     what: qsTr("forwarded address")
                 }
+
+                Item { Layout.fillWidth: true }
             }
         }
 
@@ -675,15 +681,13 @@ ScrollView {
                                 address: row.address
                                 elide: Text.ElideMiddle
                             }
-                            RowLayout {
+                            // Shows the short ID, copies the whole one.
+                            CopyableText {
                                 Layout.preferredWidth: page.columns[1].width
-                                spacing: 2
-                                Cell { text: row.nodeIdShort; font.family: Theme.monoFamily; color: Theme.textDim }
-                                // The whole ID, not the shortened one shown.
-                                CopyButton {
-                                    value: row.nodeId
-                                    what: qsTr("node ID")
-                                }
+                                text: row.nodeIdShort
+                                value: row.nodeId
+                                color: Theme.textDim
+                                what: qsTr("node ID")
                             }
                             Cell { cellWidth: page.columns[2].width; text: row.status; color: Theme.nodeStatusColor(row.status) }
                             Cell { cellWidth: page.columns[3].width; text: row.rtt >= 0 ? qsTr("%1 ms").arg(row.rtt) : "—"; color: Theme.textDim }

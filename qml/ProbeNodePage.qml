@@ -56,6 +56,7 @@ ScrollView {
 
         Label {
             Layout.fillWidth: true
+            Layout.maximumWidth: implicitWidth
             text: resultRow.value
             color: resultRow.tone
             font.pixelSize: Theme.fontSizeSmall
@@ -68,6 +69,8 @@ ScrollView {
             value: resultRow.value
             what: resultRow.label.toLowerCase()
         }
+
+        Item { Layout.fillWidth: true }
     }
 
     // Verbatim output: selectable so it can be copied out of the tool.

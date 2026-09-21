@@ -56,6 +56,15 @@ QtObject {
     // With the copy button every shown address carries beside it.
     readonly property int addressCellWidth: theme.addressWidth + 22
 
+    // A 20-byte hash in hex, measured the same way.
+    readonly property TextMetrics hashMetrics: TextMetrics {
+        font.family: theme.monoFamily
+        font.pixelSize: theme.fontSizeSmall
+        text: "ffffffffffffffffffffffffffffffffffffffff"
+    }
+    readonly property int hashWidth: Math.ceil(theme.hashMetrics.advanceWidth) + 2
+    readonly property int hashCellWidth: theme.hashWidth + 22
+
     // Binary units, like the byte totals: "512 B/s", "1.5 KiB/s", "16 KiB/s".
     function formatRate(bytesPerSecond) {
         const n = Math.max(0, bytesPerSecond)

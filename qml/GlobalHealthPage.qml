@@ -1676,13 +1676,14 @@ ScrollView {
                             Layout.preferredHeight: 26
                             spacing: Theme.spacing
 
-                            Label {
+                            CopyableText {
                                 id: groupText
 
-                                Layout.preferredWidth: Theme.addressWidth
+                                Layout.preferredWidth: Theme.addressCellWidth
                                 elide: Text.ElideMiddle
-                                font.family: Theme.monoFamily
-                                font.pixelSize: Theme.fontSizeSmall
+                                what: suspectPanel.view === "shared" ? qsTr("node ID")
+                                      : suspectPanel.view === "windows" ? qsTr("ID prefix")
+                                      : suspectPanel.view === "subnets" ? qsTr("subnet") : qsTr("address")
                                 color: Theme.text
                                 visible: suspectPanel.view !== "self" && suspectPanel.view !== "invents"
                                 text: {
@@ -1694,16 +1695,6 @@ ScrollView {
                                     default: return r.address
                                     }
                                 }
-                            }
-                            // Copies whatever the column shows. An ID prefix
-                            // pastes straight into the node list's prefix
-                            // filter.
-                            CopyButton {
-                                visible: groupText.visible
-                                value: groupText.text
-                                what: suspectPanel.view === "shared" ? qsTr("node ID")
-                                      : suspectPanel.view === "windows" ? qsTr("ID prefix")
-                                      : suspectPanel.view === "subnets" ? qsTr("subnet") : qsTr("address")
                             }
                             AddressLink {
                                 Layout.preferredWidth: Theme.addressCellWidth
