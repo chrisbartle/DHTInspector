@@ -38,13 +38,8 @@ QString decodedPreview(const QByteArray &bencodedValue, int maxChars)
 // --- StoredItemModel -------------------------------------------------------
 
 StoredItemModel::StoredItemModel(QObject *parent)
-    : QAbstractListModel(parent)
+    : KeyedListModel(parent)
 {
-}
-
-int StoredItemModel::rowCount(const QModelIndex &parent) const
-{
-    return parent.isValid() ? 0 : int(m_rows.size());
 }
 
 QVariant StoredItemModel::data(const QModelIndex &index, int role) const
@@ -85,9 +80,10 @@ QHash<int, QByteArray> StoredItemModel::roleNames() const
 void StoredItemModel::update(std::vector<dht::StoredItemRow> rows)
 {
     const int before = count();
-    beginResetModel();
-    m_rows = std::move(rows);
-    endResetModel();
+    // The target alone would do in practice; the kind makes it certain.
+    replaceRows(std::move(rows), [](const dht::StoredItemRow &row) {
+        return QByteArray(1, row.isMutable ? 'm' : 'i') + row.target.toBytes();
+    });
     if (count() != before)
         emit countChanged();
 }
@@ -105,13 +101,8 @@ void StoredItemModel::clear()
 // --- StoredInfohashModel ---------------------------------------------------
 
 StoredInfohashModel::StoredInfohashModel(QObject *parent)
-    : QAbstractListModel(parent)
+    : KeyedListModel(parent)
 {
-}
-
-int StoredInfohashModel::rowCount(const QModelIndex &parent) const
-{
-    return parent.isValid() ? 0 : int(m_rows.size());
 }
 
 QVariant StoredInfohashModel::data(const QModelIndex &index, int role) const
@@ -142,9 +133,7 @@ QHash<int, QByteArray> StoredInfohashModel::roleNames() const
 void StoredInfohashModel::update(std::vector<dht::StoredInfohashRow> rows)
 {
     const int before = count();
-    beginResetModel();
-    m_rows = std::move(rows);
-    endResetModel();
+    replaceRows(std::move(rows), [](const dht::StoredInfohashRow &row) { return row.infohash.toBytes(); });
     if (count() != before)
         emit countChanged();
 }
@@ -162,13 +151,8 @@ void StoredInfohashModel::clear()
 // --- StoredPeerModel -------------------------------------------------------
 
 StoredPeerModel::StoredPeerModel(QObject *parent)
-    : QAbstractListModel(parent)
+    : KeyedListModel(parent)
 {
-}
-
-int StoredPeerModel::rowCount(const QModelIndex &parent) const
-{
-    return parent.isValid() ? 0 : int(m_rows.size());
 }
 
 QVariant StoredPeerModel::data(const QModelIndex &index, int role) const
@@ -199,9 +183,7 @@ QHash<int, QByteArray> StoredPeerModel::roleNames() const
 void StoredPeerModel::update(std::vector<dht::StoredPeerRow> rows)
 {
     const int before = count();
-    beginResetModel();
-    m_rows = std::move(rows);
-    endResetModel();
+    replaceRows(std::move(rows), [](const dht::StoredPeerRow &row) { return row.endpoint.toCompact(); });
     if (count() != before)
         emit countChanged();
 }

@@ -11,6 +11,7 @@ int runTestClientVersion(int argc, char **argv);
 int runTestEngine(int argc, char **argv);
 int runTestHistory(int argc, char **argv);
 int runTestInbound(int argc, char **argv);
+int runTestKeyedListModel(int argc, char **argv);
 int runTestKrpc(int argc, char **argv);
 int runTestLookup(int argc, char **argv);
 int runTestNetworkStats(int argc, char **argv);
@@ -57,6 +58,7 @@ int main(int argc, char **argv)
     failures += runSuite(runTestClientVersion, "TestClientVersion", argc, argv);
     failures += runSuite(runTestHistory, "TestHistory", argc, argv);
     failures += runSuite(runTestInbound, "TestInbound", argc, argv);
+    failures += runSuite(runTestKeyedListModel, "TestKeyedListModel", argc, argv);
     failures += runSuite(runTestKrpc, "TestKrpc", argc, argv);
     failures += runSuite(runTestLookup, "TestLookup", argc, argv);
     failures += runSuite(runTestNetworkStats, "TestNetworkStats", argc, argv);

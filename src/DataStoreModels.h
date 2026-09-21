@@ -1,14 +1,15 @@
 #pragma once
 
+#include "KeyedListModel.h"
+
 #include "dhtcore/Snapshot.h"
 
-#include <QAbstractListModel>
 #include <QtQml/qqmlregistration.h>
 
 #include <vector>
 
 // Infohashes this node is holding peers for.
-class StoredInfohashModel : public QAbstractListModel
+class StoredInfohashModel : public KeyedListModel<dht::StoredInfohashRow>
 {
     Q_OBJECT
     QML_ELEMENT
@@ -25,7 +26,6 @@ public:
 
     explicit StoredInfohashModel(QObject *parent = nullptr);
 
-    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
 
@@ -37,12 +37,10 @@ public:
 signals:
     void countChanged();
 
-private:
-    std::vector<dht::StoredInfohashRow> m_rows;
 };
 
 // Peers stored for one infohash.
-class StoredPeerModel : public QAbstractListModel
+class StoredPeerModel : public KeyedListModel<dht::StoredPeerRow>
 {
     Q_OBJECT
     QML_ELEMENT
@@ -59,7 +57,6 @@ public:
 
     explicit StoredPeerModel(QObject *parent = nullptr);
 
-    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
 
@@ -71,12 +68,10 @@ public:
 signals:
     void countChanged();
 
-private:
-    std::vector<dht::StoredPeerRow> m_rows;
 };
 
 // BEP 44 items held by this node, immutable and mutable together.
-class StoredItemModel : public QAbstractListModel
+class StoredItemModel : public KeyedListModel<dht::StoredItemRow>
 {
     Q_OBJECT
     QML_ELEMENT
@@ -98,7 +93,6 @@ public:
 
     explicit StoredItemModel(QObject *parent = nullptr);
 
-    int rowCount(const QModelIndex &parent = QModelIndex()) const override;
     QVariant data(const QModelIndex &index, int role) const override;
     QHash<int, QByteArray> roleNames() const override;
 
@@ -110,8 +104,6 @@ public:
 signals:
     void countChanged();
 
-private:
-    std::vector<dht::StoredItemRow> m_rows;
 };
 
 // "27m", or "expired" once the deadline has passed.

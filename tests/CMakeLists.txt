@@ -11,6 +11,7 @@ qt_add_executable(dhtcore_tests
     TestEngine.cpp
     TestHistory.cpp
     TestInbound.cpp
+    TestKeyedListModel.cpp
     TestKrpc.cpp
     TestLookup.cpp
     TestNetworkStats.cpp
@@ -27,5 +28,9 @@ target_link_libraries(dhtcore_tests PRIVATE
     dhtcore
     Qt6::Test
 )
+
+# KeyedListModel is a header-only template from the application, tested
+# here without pulling in the rest of it.
+target_include_directories(dhtcore_tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 add_test(NAME dhtcore_tests COMMAND dhtcore_tests)
