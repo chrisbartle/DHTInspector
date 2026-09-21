@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(DHTInspector
-    VERSION 1.0.0.0
+    VERSION 1.0.1.0
     DESCRIPTION "Diagnostic tool for the Kademlia Mainline DHT Network"
     LANGUAGES CXX C  # C for the vendored Monocypher
 )
