@@ -83,7 +83,11 @@ struct EngineStats
     qint64 queriesDelayed = 0;   // our queries that waited for a host's allowance
     qint64 queriesRefused = 0;   // our queries never sent: too many already waiting
     int queriesWaiting = 0;      // waiting right now
-    qint64 repliesShed = 0;      // queries left unanswered because of the send limit
+    // Engine-wide, not per node: endpoints contacted afresh, each of which
+    // costs a router one connection-tracking entry, and how many of those
+    // entries it would still be holding.
+    qint64 newContacts = 0;
+    int trackedContacts = 0;
     qint64 sendFailures = 0;     // datagrams the OS would not take (buffer full)
     int storedInfohashes = 0;
     int storedPeers = 0;
@@ -106,7 +110,6 @@ struct EngineStats
         queriesDelayed += o.queriesDelayed;
         queriesRefused += o.queriesRefused;
         queriesWaiting += o.queriesWaiting;
-        repliesShed += o.repliesShed;
         sendFailures += o.sendFailures;
         activeLookups += o.activeLookups;
     }

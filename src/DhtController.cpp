@@ -81,7 +81,8 @@ EngineStatistics toStatistics(const dht::EngineStats &s)
     out.queriesDelayed = s.queriesDelayed;
     out.queriesRefused = s.queriesRefused;
     out.queriesWaiting = s.queriesWaiting;
-    out.repliesShed = s.repliesShed;
+    out.newContacts = s.newContacts;
+    out.trackedContacts = s.trackedContacts;
     out.sendFailures = s.sendFailures;
     out.storedInfohashes = s.storedInfohashes;
     out.storedPeers = s.storedPeers;
@@ -324,17 +325,17 @@ QString DhtController::validateNodeId(const QString &text) const
     return {};
 }
 
-void DhtController::setSendLimit(int bytesPerSecond)
+void DhtController::setContactLimit(int contactsPerSecond)
 {
-    bytesPerSecond = std::max(0, bytesPerSecond);
-    if (bytesPerSecond == m_sendLimit)
+    contactsPerSecond = std::max(0, contactsPerSecond);
+    if (contactsPerSecond == m_contactLimit)
         return;
-    m_sendLimit = bytesPerSecond;
-    emit sendLimitChanged();
+    m_contactLimit = contactsPerSecond;
+    emit contactLimitChanged();
 
     if (m_engine) {
         QMetaObject::invokeMethod(
-            m_engine, [engine = m_engine, bytesPerSecond] { engine->setSendLimit(bytesPerSecond); },
+            m_engine, [engine = m_engine, contactsPerSecond] { engine->setContactLimit(contactsPerSecond); },
             Qt::QueuedConnection);
     }
 }
@@ -1292,7 +1293,7 @@ void DhtController::startEngine()
     config.portForwarding = m_portForwarding;
     config.bep42 = m_bep42Enabled;
     config.readOnly = m_readOnlyMode;
-    config.sendLimit = m_sendLimit;
+    config.contactLimit = m_contactLimit;
     config.catalogCap = m_catalogCap;
     config.nodeIdV4 = *idV4;
     config.nodeIdV6 = idV6;
@@ -1401,7 +1402,8 @@ void DhtController::applySnapshot(const dht::EngineSnapshot &snapshot)
         m_trafficClock.start();
     const qint64 now = m_trafficClock.elapsed();
     const dht::CrawlSnapshot &c = snapshot.crawl;
-    m_traffic.push_back({now, snapshot.stats.bytesIn, snapshot.stats.bytesOut, c.queries, c.answers + c.errors});
+    m_traffic.push_back({now, snapshot.stats.bytesIn, snapshot.stats.bytesOut, c.queries, c.answers + c.errors,
+                         snapshot.stats.newContacts});
     while (m_traffic.size() > 2 && now - m_traffic[1].atMs >= WindowMs)
         m_traffic.pop_front();
     const TrafficSample &oldest = m_traffic.front();
@@ -1409,6 +1411,7 @@ void DhtController::applySnapshot(const dht::EngineSnapshot &snapshot)
         const double seconds = double(now - oldest.atMs) / 1000.0;
         m_stats.bytesInPerSecond = double(snapshot.stats.bytesIn - oldest.bytesIn) / seconds;
         m_stats.bytesOutPerSecond = double(snapshot.stats.bytesOut - oldest.bytesOut) / seconds;
+        m_stats.newContactsPerSecond = double(snapshot.stats.newContacts - oldest.newContacts) / seconds;
     }
 
     m_crawl = toCrawlStatus(c);

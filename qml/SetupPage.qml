@@ -32,21 +32,28 @@ ScrollView {
         return (n / (1024 * 1024 * 1024)).toFixed(2) + " GiB"
     }
 
-    // Send limit positions, in KiB/s; one past the end means unlimited.
-    readonly property var sendLimitSteps: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096]
-
-    function sendLimitIndex(bytes) {
-        if (bytes <= 0)
-            return sendLimitSteps.length
-        for (let i = 0; i < sendLimitSteps.length; ++i) {
-            if (sendLimitSteps[i] * 1024 >= bytes)
-                return i
-        }
-        return sendLimitSteps.length - 1
+    function count(n) {
+        return Number(n).toLocaleString(Qt.locale(), "f", 0)
     }
 
-    function sendLimitAt(index) {
-        return index >= sendLimitSteps.length ? 0 : sendLimitSteps[index] * 1024
+    // Contact limit positions, in new endpoints a second; one past the end
+    // means unlimited. Multiplied by the window a router is assumed to hold
+    // an entry for, these run from a few hundred entries to far more than a
+    // home router keeps.
+    readonly property var contactSteps: [5, 10, 25, 50, 100, 200, 400, 800, 1600]
+
+    function contactIndex(perSecond) {
+        if (perSecond <= 0)
+            return contactSteps.length
+        for (let i = 0; i < contactSteps.length; ++i) {
+            if (contactSteps[i] >= perSecond)
+                return i
+        }
+        return contactSteps.length - 1
+    }
+
+    function contactAt(index) {
+        return index >= contactSteps.length ? 0 : contactSteps[index]
     }
 
     function mappingTone(state) {
@@ -397,21 +404,21 @@ ScrollView {
                 Layout.fillWidth: true
                 spacing: Theme.spacing
 
-                FieldLabel { text: qsTr("Send limit") }
+                FieldLabel { text: qsTr("Contact limit") }
 
                 ThemedSlider {
-                    id: sendLimitSlider
+                    id: contactLimitSlider
 
                     // Always shows the controller's value. A move is sent as
                     // a request and the binding restored, the same pattern as
                     // the switches, so assistive tools that set the value
                     // directly work too.
-                    readonly property int wanted: page.sendLimitIndex(DhtController.sendLimit)
+                    readonly property int wanted: page.contactIndex(DhtController.contactLimit)
 
                     Layout.preferredWidth: 220
-                    Accessible.name: qsTr("Send limit")
+                    Accessible.name: qsTr("Contact limit")
                     from: 0
-                    to: page.sendLimitSteps.length
+                    to: page.contactSteps.length
                     stepSize: 1
                     snapMode: Slider.SnapAlways
                     live: true
@@ -419,27 +426,34 @@ ScrollView {
                     onValueChanged: {
                         const index = Math.round(value)
                         if (index !== wanted) {
-                            DhtController.sendLimit = page.sendLimitAt(index)
-                            value = Qt.binding(() => sendLimitSlider.wanted)
+                            DhtController.contactLimit = page.contactAt(index)
+                            value = Qt.binding(() => contactLimitSlider.wanted)
                         }
                     }
                 }
 
                 Label {
                     Layout.preferredWidth: 90
-                    text: DhtController.sendLimit > 0 ? Theme.formatRate(DhtController.sendLimit) : qsTr("Unlimited")
-                    color: DhtController.sendLimit > 0 ? Theme.text : Theme.textDim
+                    text: DhtController.contactLimit > 0 ? qsTr("%1/s").arg(DhtController.contactLimit)
+                                                         : qsTr("Unlimited")
+                    color: DhtController.contactLimit > 0 ? Theme.text : Theme.textDim
                     font.pixelSize: Theme.fontSizeSmall
                     font.family: Theme.monoFamily
                 }
 
                 Hint {
                     text: {
-                        let t = qsTr("Caps everything this node sends, both address families together, counting UDP payload. Over the limit our own queries wait their turn and incoming queries go unanswered, as libtorrent does. Takes effect immediately. Separately, no single host is ever sent more than two queries a second.")
-                        if (page.running && DhtController.sendLimit > 0) {
-                            t += " " + qsTr("Sending %1 now.").arg(Theme.formatRate(DhtController.stats.bytesOutPerSecond))
-                            if (DhtController.stats.repliesShed > 0)
-                                t += " " + qsTr("%n incoming query(s) left unanswered so far.", "", DhtController.stats.repliesShed)
+                        let t = qsTr("How many endpoints a second this node may contact afresh, both address families together. A router keeps one entry per endpoint it sees us talk to, for a minute or two, and those tables hold only a few thousand. Queries to an endpoint contacted within the last %1 minutes are free, and replies are never held back, so incoming queries are always answered; our own queries wait their turn instead. Takes effect immediately. Separately, no single host is ever sent more than two queries a second.")
+                                .arg(Math.round(DhtController.contactWindowSeconds / 60))
+                        if (DhtController.contactLimit > 0) {
+                            t += " " + qsTr("At %1 a second a router would hold at most about %2 entries, fewer if it forgets them sooner.")
+                                       .arg(DhtController.contactLimit)
+                                       .arg(page.count(DhtController.contactLimit * DhtController.contactWindowSeconds))
+                        }
+                        if (page.running) {
+                            t += " " + qsTr("Contacting %1 a second now, with about %2 entries held.")
+                                       .arg(Number(DhtController.stats.newContactsPerSecond).toFixed(1))
+                                       .arg(page.count(DhtController.stats.trackedContacts))
                         }
                         return t
                     }
@@ -730,7 +744,11 @@ ScrollView {
                 StatTile { label: qsTr("Malformed received"); value: String(DhtController.stats.malformedIn) }
                 StatTile { label: qsTr("Rate limited"); value: String(DhtController.stats.rateLimited) }
                 StatTile { label: qsTr("Dropped (read-only)"); value: String(DhtController.stats.readOnlyDropped) }
-                StatTile { label: qsTr("Unanswered (send limit)"); value: String(DhtController.stats.repliesShed) }
+                StatTile {
+                    label: qsTr("New contacts / tracked")
+                    value: qsTr("%1 / %2").arg(page.count(DhtController.stats.newContacts))
+                                          .arg(page.count(DhtController.stats.trackedContacts))
+                }
                 StatTile {
                     label: qsTr("Rate out / in")
                     value: Theme.formatRate(DhtController.stats.bytesOutPerSecond) + " / " + Theme.formatRate(DhtController.stats.bytesInPerSecond)

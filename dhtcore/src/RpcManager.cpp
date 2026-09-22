@@ -58,7 +58,8 @@ void RpcManager::query(const Endpoint &to, const QByteArray &method, BValue::Dic
     // Anything already waiting for this host goes first, so order is kept,
     // and nothing jumps ahead of hosts that are waiting for the budget.
     auto queue = m_queues.find(to.address);
-    if (queue == m_queues.end() && !m_budgetExhausted && canSendNow(now) && m_limiter.allow(to.address, now)) {
+    if (queue == m_queues.end() && !m_budgetExhausted && canSendNow(now) && affordable(to, now)
+        && m_limiter.allow(to.address, now)) {
         send(std::move(q));
         return;
     }
@@ -90,7 +91,15 @@ int RpcManager::queuedFor(const QHostAddress &address) const
 
 bool RpcManager::canSendNow(qint64 now) const
 {
-    return int(m_pending.size()) < m_maxPending && (!m_budget || m_budget->available(now));
+    Q_UNUSED(now);
+    return int(m_pending.size()) < m_maxPending;
+}
+
+// A query to an endpoint the router is already tracking is always
+// affordable; a new one needs the contact allowance.
+bool RpcManager::affordable(const Endpoint &to, qint64 now) const
+{
+    return !m_budget || m_budget->allows(to, now);
 }
 
 void RpcManager::send(Queued q)
@@ -100,6 +109,8 @@ void RpcManager::send(Queued q)
     const QByteArray datagram = krpc::encodeQuery(tid, q.method, std::move(q.arguments), q.version, m_readOnly);
     m_pending.insert(tid, Pending{q.to, datagram, now, now + q.timeoutMs, std::move(q.callback)});
     if (m_send(datagram, q.to)) {
+        if (m_budget)
+            m_budget->record(q.to, now);
         if (q.onSent)
             q.onSent();
         return;
@@ -152,11 +163,15 @@ void RpcManager::drain()
         const auto queue = m_queues.find(host);
         if (queue == m_queues.end())
             continue;
-        if (!queue->empty() && m_limiter.allow(host, now)) {
-            Queued q = std::move(queue->front());
-            queue->pop_front();
-            --m_queuedTotal;
-            send(std::move(q));
+        if (!queue->empty()) {
+            if (!affordable(queue->front().to, now)) {
+                exhausted = true;  // waiting on the contact allowance
+            } else if (m_limiter.allow(host, now)) {
+                Queued q = std::move(queue->front());
+                queue->pop_front();
+                --m_queuedTotal;
+                send(std::move(q));
+            }
         }
         if (queue->empty())
             m_queues.erase(queue);

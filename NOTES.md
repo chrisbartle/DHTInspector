@@ -49,12 +49,18 @@ tests and releases work.
   that 95% of answers beat, between 0.8 and 3 seconds. On the live network
   this cut the median lookup from about 21 to about 5.6 seconds, with the
   same number of queries and the same completeness.
-- Optional overall send limit (Setup tab, adjustable while running, off by
-  default): a byte budget shared by both address families, counting UDP
-  payload. Over it, our own queries wait their turn, taken host by host so
-  none is starved, and incoming queries are dropped unanswered before they
-  change anything, as libtorrent does. Current send and receive rates are on
-  the status bar.
+- Optional contact limit (Setup tab, adjustable while running, off by
+  default): how many endpoints a second we may contact afresh, shared by
+  both address families. What a home router struggles with is the number of
+  UDP conversations it tracks, one entry per remote endpoint held for a
+  minute or two, in a table only a few thousand deep; bytes are beside the
+  point, so this counts endpoints instead. A query to an endpoint written to
+  within the window (3 minutes, longer than a router's own timeout) reuses
+  its entry and costs nothing, and replies are never held back, since the
+  query being answered made an entry of its own on the way in. Over the
+  limit our own queries wait their turn, taken host by host so none is
+  starved. New contacts and the entries a router would be holding are on the
+  Setup tab; send and receive rates are on the status bar.
 - Network scan (Global Health tab, Monitoring switch, off by default): asks
   every node it hears of for its neighbours, gives a silent node a second
   try, then keeps rechecking what it knows, longest-unchecked first. It runs

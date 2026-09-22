@@ -75,7 +75,9 @@ class EngineStatistics
     Q_PROPERTY(qint64 queriesDelayed MEMBER queriesDelayed)
     Q_PROPERTY(qint64 queriesRefused MEMBER queriesRefused)
     Q_PROPERTY(int queriesWaiting MEMBER queriesWaiting)
-    Q_PROPERTY(qint64 repliesShed MEMBER repliesShed)
+    Q_PROPERTY(qint64 newContacts MEMBER newContacts)
+    Q_PROPERTY(int trackedContacts MEMBER trackedContacts)
+    Q_PROPERTY(double newContactsPerSecond MEMBER newContactsPerSecond)
     Q_PROPERTY(qint64 sendFailures MEMBER sendFailures)
     Q_PROPERTY(double bytesInPerSecond MEMBER bytesInPerSecond)
     Q_PROPERTY(double bytesOutPerSecond MEMBER bytesOutPerSecond)
@@ -99,7 +101,9 @@ public:
     qint64 queriesDelayed = 0;
     qint64 queriesRefused = 0;
     int queriesWaiting = 0;
-    qint64 repliesShed = 0;
+    qint64 newContacts = 0;
+    int trackedContacts = 0;
+    double newContactsPerSecond = 0;
     qint64 sendFailures = 0;
     // Averaged over the last few seconds of snapshots.
     double bytesInPerSecond = 0;

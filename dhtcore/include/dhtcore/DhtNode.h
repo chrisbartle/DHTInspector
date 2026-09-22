@@ -47,9 +47,9 @@ class DhtNode : public QObject
 public:
     enum class SeedSource { Injected, Bootstrap };
 
-    // `budget` is the engine-wide send limit, shared with the other family;
+    // `budget` is the engine-wide contact limit, shared with the other family;
     // null means unlimited.
-    DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, SendBudget *budget = nullptr,
+    DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, ContactBudget *budget = nullptr,
             QObject *parent = nullptr);
     ~DhtNode() override;
 
@@ -150,7 +150,6 @@ private:
                    RpcManager::SentFn onSent = {});
     void sendResponse(const krpc::Message &query, const Endpoint &to, BValue::Dict values);
     void sendError(const QByteArray &transactionId, const Endpoint &to, int code, const QByteArray &message);
-    bool budgetAllowsReply();
 
     void onRpcReply(const RpcReply &reply);
     bool isRouter(const Endpoint &endpoint) const;
@@ -168,7 +167,7 @@ private:
     NodeConfig m_config;
     PeerStorage *m_storage;
     ItemStorage *m_items;
-    SendBudget *m_budget;
+    ContactBudget *m_budget;
     InboundTally *m_inbound = nullptr;
     QUdpSocket *m_socket = nullptr;
     RpcManager *m_rpc = nullptr;

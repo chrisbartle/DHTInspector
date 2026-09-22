@@ -33,9 +33,9 @@ struct EngineConfig
     bool readOnly = false;
     // The most we will ask of any single host; see HostLimit.
     HostLimit hostLimit;
-    // Everything we send, both families together, in bytes per second of
-    // UDP payload. 0 means unlimited. Adjustable while running.
-    qint64 sendLimit = 0;
+    // Endpoints we may contact afresh per second, both families together;
+    // see ContactBudget. 0 means unlimited. Adjustable while running.
+    int contactLimit = 0;
     // The network scan: how many nodes it may remember, and its pacing.
     // Scanning itself starts only when monitoring is switched on.
     int catalogCap = NodeCatalog::DefaultCap;
@@ -81,7 +81,7 @@ public:
 
     void setPortForwarding(bool enabled);
     void setReadOnly(bool enabled);
-    void setSendLimit(qint64 bytesPerSecond);
+    void setContactLimit(int contactsPerSecond);
 
     // Monitoring scans the whole network continuously. Turning it off
     // pauses the scan and keeps what it found; shutdown() discards it.
@@ -100,7 +100,7 @@ public:
     void queryNodes(const dht::NodeQuery &query, quint64 requestId);
     void exportNodes(const dht::NodeQuery &query, quint64 requestId);
     const NodeCatalog &catalog() const { return m_catalog; }
-    qint64 sendLimit() const { return m_budget.limit(); }
+    int contactLimit() const { return m_budget.limit(); }
 
     void getPeers(const NodeId &infohash, std::function<void(const std::vector<Endpoint> &peers)> done);
     void announce(const NodeId &infohash, quint16 port, bool impliedPort, std::function<void(int accepted)> done);
@@ -151,7 +151,7 @@ private:
     EngineConfig m_config;
     PeerStorage m_storage;
     ItemStorage m_items;
-    SendBudget m_budget;
+    ContactBudget m_budget;
     NodeCatalog m_catalog;
     InboundTally m_inbound;
     Crawler *m_crawler = nullptr;

@@ -80,9 +80,10 @@ public:
     void setHostLimit(const HostLimit &limit);
     const HostLimit &hostLimit() const { return m_hostLimit; }
 
-    // The engine-wide byte budget; null means unlimited. Only consulted here:
-    // whoever actually sends the datagram spends from it.
-    void setBudget(SendBudget *budget) { m_budget = budget; }
+    // The engine-wide limit on newly contacted endpoints; null means
+    // unlimited. Queries are the only thing charged to it, and a query held
+    // back by it waits in the queue like any other.
+    void setBudget(ContactBudget *budget) { m_budget = budget; }
     void setMaxPending(int maxPending) { m_maxPending = std::clamp(maxPending, 1, 65536); }
 
     // Returns true if the response or error matched an outstanding query.
@@ -113,6 +114,7 @@ private:
     void refuse(Queued query);
     void reportNotSent(Callback callback, const Endpoint &to);
     bool canSendNow(qint64 now) const;
+    bool affordable(const Endpoint &to, qint64 now) const;
     void drain();
     void expire();
     QByteArray nextTransactionId();
@@ -130,7 +132,7 @@ private:
     QHash<QByteArray, Pending> m_pending;
     QHash<QHostAddress, std::deque<Queued>> m_queues;
     std::deque<QHostAddress> m_order;  // hosts with waiting queries, served in turn
-    SendBudget *m_budget = nullptr;
+    ContactBudget *m_budget = nullptr;
     bool m_budgetExhausted = false;    // hosts are waiting on the budget
     HostLimit m_hostLimit;
     RateLimiter m_limiter;

@@ -367,13 +367,13 @@ std::vector<NodeId> PeerStorage::sampleInfohashes(int max) const
     return all;
 }
 
-void SendBudget::setLimit(qint64 bytesPerSecond, qint64 now)
+void ContactBudget::setLimit(int contactsPerSecond, qint64 now)
 {
-    bytesPerSecond = std::max<qint64>(0, bytesPerSecond);
-    if (bytesPerSecond == m_limit)
+    contactsPerSecond = std::max(0, contactsPerSecond);
+    if (contactsPerSecond == m_limit)
         return;
     const bool wasLimited = isLimited();
-    m_limit = bytesPerSecond;
+    m_limit = contactsPerSecond;
     if (!wasLimited)
         m_balance = double(m_limit);  // start with a full second
     else
@@ -381,7 +381,7 @@ void SendBudget::setLimit(qint64 bytesPerSecond, qint64 now)
     m_last = now;
 }
 
-void SendBudget::refill(qint64 now)
+void ContactBudget::refill(qint64 now)
 {
     if (now > m_last) {
         m_balance = std::min(double(m_limit), m_balance + double(now - m_last) * double(m_limit) / 1000.0);
@@ -389,20 +389,37 @@ void SendBudget::refill(qint64 now)
     }
 }
 
-bool SendBudget::available(qint64 now)
+bool ContactBudget::isLive(const Endpoint &to, qint64 now) const
 {
-    if (!isLimited())
-        return true;
-    refill(now);
-    return m_balance > 0;
+    const auto it = m_recent.constFind(to);
+    return it != m_recent.cend() && now - *it < WindowMs;
 }
 
-void SendBudget::spend(qint64 bytes, qint64 now)
+bool ContactBudget::allows(const Endpoint &to, qint64 now)
 {
-    if (!isLimited())
-        return;
+    if (!isLimited() || isLive(to, now))
+        return true;
     refill(now);
-    m_balance -= double(bytes);
+    return m_balance >= 1.0;
+}
+
+void ContactBudget::record(const Endpoint &to, qint64 now)
+{
+    const bool live = isLive(to, now);
+    m_recent.insert(to, now);
+    if (live)
+        return;
+    ++m_contacts;
+    if (isLimited()) {
+        refill(now);
+        m_balance -= 1.0;
+    }
+}
+
+void ContactBudget::prune(qint64 now)
+{
+    for (auto it = m_recent.begin(); it != m_recent.end();)
+        it = (now - it.value() >= WindowMs) ? m_recent.erase(it) : std::next(it);
 }
 
 void RateLimiter::prune(qint64 now)

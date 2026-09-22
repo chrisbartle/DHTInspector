@@ -269,12 +269,11 @@ QHostAddress hostNumber(int i)
 void TestRpcManager::sharesATightBudgetAcrossHosts()
 {
     Recorder rec;
-    SendBudget budget;
-    constexpr qint64 Limit = 2000;
+    ContactBudget budget;
+    constexpr int Limit = 4;  // new endpoints a second
     budget.setLimit(Limit, nowMs());
     RpcManager rpc([&](const QByteArray &d, const Endpoint &to) {
         rec.sent.push_back({d, to, rec.clock.elapsed()});
-        budget.spend(d.size(), nowMs());  // what DhtNode does when it sends
         return true;
     });
     rpc.setHostLimit({1000.0, 1000.0, 64});  // only the budget matters here
@@ -295,39 +294,34 @@ void TestRpcManager::sharesATightBudgetAcrossHosts()
 
     QTRY_COMPARE_WITH_TIMEOUT(int(rec.sent.size()), Hosts * PerHost + 1, 10000);
 
-    // Bytes sent by any moment stay within a full second's allowance, the
-    // rate since, one overdrawn datagram, and a little timer slack.
-    qint64 total = 0;
+    // Endpoints first written to by any moment stay within a full second's
+    // allowance, the rate since, and a little timer slack. Later queries to
+    // an endpoint already contacted are free and do not count.
+    std::vector<Endpoint> seen;
     for (const Sent &s : rec.sent) {
-        total += s.datagram.size();
-        const double allowed = Limit + Limit * s.atMs / 1000.0 + s.datagram.size() + Limit * 0.1;
-        QVERIFY2(total <= allowed, qPrintable(QStringLiteral("%1 bytes by %2 ms").arg(total).arg(s.atMs)));
+        if (std::find(seen.begin(), seen.end(), s.to) != seen.end())
+            continue;
+        seen.push_back(s.to);
+        const double allowed = Limit + Limit * s.atMs / 1000.0 + 1 + Limit * 0.1;
+        QVERIFY2(seen.size() <= allowed,
+                 qPrintable(QStringLiteral("%1 endpoints by %2 ms").arg(seen.size()).arg(s.atMs)));
     }
 
-    // Waiting hosts were served in turn: the first round after the burst
-    // reaches each waiting host once before any gets a second go.
-    std::vector<QHostAddress> round;
-    for (size_t i = immediate; i < rec.sent.size() && round.size() < 5; ++i) {
-        const QHostAddress host = rec.sent[i].to.address;
-        QVERIFY2(std::find(round.begin(), round.end(), host) == round.end(),
-                 qPrintable(QStringLiteral("%1 served twice in one round").arg(host.toString())));
-        round.push_back(host);
-    }
-    // And the newcomer only after that first round.
-    const auto late = std::find_if(rec.sent.begin(), rec.sent.end(),
-                                   [](const Sent &s) { return methodOf(s.datagram) == "late"; });
-    QVERIFY(late != rec.sent.end());
-    QVERIFY2(late - rec.sent.begin() >= immediate + 5, qPrintable(QString::number(late - rec.sent.begin())));
+    // Hosts waiting for the allowance were reached in turn, so the newcomer
+    // is contacted only after those already waiting. Repeat queries to a
+    // host already contacted cost nothing and do not count here.
+    const auto lateAt = std::find(seen.begin(), seen.end(), Endpoint(hostNumber(99), 1000));
+    QVERIFY(lateAt != seen.end());
+    QVERIFY2(lateAt - seen.begin() >= 5, qPrintable(QString::number(lateAt - seen.begin())));
 }
 
 void TestRpcManager::liftingTheBudgetReleasesTheQueue()
 {
     Recorder rec;
-    SendBudget budget;
-    budget.setLimit(300, nowMs());
+    ContactBudget budget;
+    budget.setLimit(1, nowMs());
     RpcManager rpc([&](const QByteArray &d, const Endpoint &to) {
         rec.sent.push_back({d, to, rec.clock.elapsed()});
-        budget.spend(d.size(), nowMs());
         return true;
     });
     rpc.setHostLimit({1000.0, 1000.0, 64});

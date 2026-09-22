@@ -21,7 +21,8 @@ files:
 
 1. On the **Setup** tab, switch on **DHT engine**, then press
    **Auto-bootstrap** to join the network through the well-known bootstrap
-   routers. IPv6, BEP 42, port forwarding and a send limit are set here too.
+   routers. IPv6, BEP 42, port forwarding and a contact limit are set here
+   too.
 2. Then use whichever tab fits the job:
    - **Search** finds peers for an infohash, announces to it, and fetches or
      publishes BEP 44 items.
@@ -34,7 +35,7 @@ files:
      filterable node list that can be exported. *Warning: Enabling the
      Monitor option on this tab may overwhelm the local router as well as
      upstream routers and may even cause the ISP to flag the connect as
-     hacked. It is highly recommended that the Send Limit in the **Setup**
+     hacked. It is highly recommended that the Contact limit on the **Setup**
      tab is used to prevent overloads!*
    - **Data Store** shows what other nodes have announced to this one, and
      the BEP 44 items stored with it.

@@ -325,8 +325,8 @@ ScrollView {
                 }
 
                 Hint {
-                    text: DhtController.sendLimit > 0
-                          ? qsTr("Send limit %1 (Setup tab). No node is sent more than two queries a second.").arg(Theme.formatRate(DhtController.sendLimit))
+                    text: DhtController.contactLimit > 0
+                          ? qsTr("Contact limit %1 new endpoints a second (Setup tab). No node is sent more than two queries a second.").arg(DhtController.contactLimit)
                           : qsTr("Send limit off (Setup tab), so the pace is set by how fast this machine keeps up. No node is sent more than two queries a second.")
                 }
             }

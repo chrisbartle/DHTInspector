@@ -177,25 +177,47 @@ private:
     double m_burst;
 };
 
-// Everything the engine may send, in bytes per second, shared by both
-// address families. Sending may overdraw it by one datagram; the next send
-// then waits until the balance is positive again. A limit of 0 means
-// unlimited. Holds at most one second's worth, so an idle spell does not
-// save up a large burst.
-class SendBudget
+// How many endpoints a second the engine may contact afresh, both address
+// families together.
+//
+// What a home router struggles with is not traffic but the number of UDP
+// conversations it has to keep track of: one entry per remote endpoint,
+// held for its timeout, in a table only a few thousand entries deep. A
+// query to an endpoint we have written to within the window reuses that
+// entry and so costs nothing here, and replies cost nothing either, since
+// the query being answered made an entry of its own on the way in.
+//
+// A limit of 0 means unlimited; endpoints are tracked either way, so the
+// load can be shown. Holds at most one second's worth, so an idle spell
+// does not save up a large burst.
+class ContactBudget
 {
 public:
-    void setLimit(qint64 bytesPerSecond, qint64 now);
-    qint64 limit() const { return m_limit; }
+    // How long a router is taken to keep an entry. Longer than the usual 30
+    // to 120 seconds, so neither the charging nor the count shown is
+    // optimistic.
+    static constexpr qint64 WindowMs = 180 * 1000;
+
+    void setLimit(int contactsPerSecond, qint64 now);
+    int limit() const { return m_limit; }
     bool isLimited() const { return m_limit > 0; }
 
-    bool available(qint64 now);
-    void spend(qint64 bytes, qint64 now);
+    // Whether a datagram may go to `to` now.
+    bool allows(const Endpoint &to, qint64 now);
+    // Records one actually sent, which is what charges for a new endpoint.
+    void record(const Endpoint &to, qint64 now);
+    void prune(qint64 now);
+
+    qint64 contacts() const { return m_contacts; }              // new endpoints, in total
+    int tracked() const { return int(m_recent.size()); }        // entries a router would hold now
 
 private:
     void refill(qint64 now);
+    bool isLive(const Endpoint &to, qint64 now) const;
 
-    qint64 m_limit = 0;
+    QHash<Endpoint, qint64> m_recent;  // endpoint -> when we last wrote to it
+    qint64 m_contacts = 0;
+    int m_limit = 0;
     double m_balance = 0;
     qint64 m_last = 0;
 };

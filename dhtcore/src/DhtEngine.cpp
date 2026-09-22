@@ -42,6 +42,7 @@ DhtEngine::DhtEngine(QObject *parent)
         const qint64 now = nowMs();
         m_storage.expire(now);
         m_items.expire(now);
+        m_budget.prune(now);
     });
 }
 
@@ -55,7 +56,7 @@ bool DhtEngine::start(const EngineConfig &config, QString *error)
     if (m_running)
         return true;
     m_config = config;
-    m_budget.setLimit(config.sendLimit, nowMs());
+    m_budget.setLimit(config.contactLimit, nowMs());
     m_catalog.clear();
     m_catalog.setCap(config.catalogCap);
 
@@ -230,10 +231,10 @@ void DhtEngine::bootstrap()
     }
 }
 
-void DhtEngine::setSendLimit(qint64 bytesPerSecond)
+void DhtEngine::setContactLimit(int contactsPerSecond)
 {
-    m_config.sendLimit = bytesPerSecond;
-    m_budget.setLimit(bytesPerSecond, nowMs());
+    m_config.contactLimit = contactsPerSecond;
+    m_budget.setLimit(contactsPerSecond, nowMs());
     scheduleSnapshot();
 }
 
@@ -690,6 +691,8 @@ EngineSnapshot DhtEngine::snapshot() const
 
     s.stats.storedInfohashes = m_storage.infohashCount();
     s.stats.storedPeers = m_storage.peerCount();
+    s.stats.newContacts = m_budget.contacts();
+    s.stats.trackedContacts = m_budget.tracked();
 
     std::sort(s.nodes.begin(), s.nodes.end(),
               [](const NodeRow &a, const NodeRow &b) { return a.sortKey < b.sortKey; });

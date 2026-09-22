@@ -13,6 +13,7 @@
 #include <QUdpSocket>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <set>
 #include <memory>
@@ -177,7 +178,7 @@ private slots:
     void probesASingleNode();
     void readOnlyModeAnswersNothing();
     void neverOverwhelmsOneHost();
-    void sendLimitShedsRepliesAndCanBeLifted();
+    void contactLimitPacesQueriesButNeverReplies();
     void monitoringDiscoversTheWholeSwarm();
     void monitoringMarksSilentAndGoneNodes();
     void monitoringPausesAndHonoursTheCap();
@@ -1107,15 +1108,16 @@ void TestEngine::neverOverwhelmsOneHost()
     QCOMPARE(stats.queriesWaiting, 0);
 }
 
-// Over the send limit incoming queries go unanswered; lifting the limit
-// while running restores service at once.
-void TestEngine::sendLimitShedsRepliesAndCanBeLifted()
+// A contact limit holds back our own queries to endpoints the router is
+// not already tracking, but every incoming query is still answered, since a
+// reply costs a router nothing: the query made its entry on the way in.
+void TestEngine::contactLimitPacesQueriesButNeverReplies()
 {
     EngineConfig config = loopbackConfig();
-    config.sendLimit = 300;  // a few replies' worth
+    config.contactLimit = 1;  // one new endpoint a second
     auto engine = startEngineWith(config);
     QVERIFY(engine);
-    QCOMPARE(engine->sendLimit(), qint64(300));
+    QCOMPARE(engine->contactLimit(), 1);
     const quint16 port = portOf(*engine);
 
     QUdpSocket client;
@@ -1148,16 +1150,33 @@ void TestEngine::sendLimitShedsRepliesAndCanBeLifted()
         return std::make_pair(replies, bytes);
     };
 
+    // Every one of them is answered, tight limit or not.
     pingBurst("a", 30);
-    const auto [limitedReplies, limitedBytes] = collectReplies("a", 800);
-    QVERIFY2(limitedReplies > 0 && limitedReplies < 30, qPrintable(QString::number(limitedReplies)));
-    // A full second's worth, what refilled in the wait, and one overdraw.
-    QVERIFY2(limitedBytes <= 300 + 300 * 0.8 + 150, qPrintable(QString::number(limitedBytes)));
-    const EngineStats stats = engine->node(Family::IPv4)->stats();
-    QVERIFY2(stats.repliesShed >= 30 - limitedReplies, qPrintable(QString::number(stats.repliesShed)));
+    const auto [limitedReplies, limitedBytes] = collectReplies("a", 2000);
+    Q_UNUSED(limitedBytes);
+    QCOMPARE(limitedReplies, 30);
 
-    engine->setSendLimit(0);
-    QCOMPARE(engine->sendLimit(), qint64(0));
+    // Our own queries are paced instead. Five sockets stand in for five
+    // endpoints the router has not seen; each counts as reached once a
+    // query lands on it.
+    std::array<QUdpSocket, 5> targets;
+    DhtNode *node = engine->node(Family::IPv4);
+    for (QUdpSocket &socket : targets) {
+        QVERIFY(socket.bind(QHostAddress(QHostAddress::LocalHost), 0));
+        node->probe(Endpoint(QHostAddress(QHostAddress::LocalHost), socket.localPort()), "ping", {}, {}, 60000);
+    }
+    const auto reached = [&targets] {
+        return int(std::count_if(targets.begin(), targets.end(),
+                                 [](const QUdpSocket &s) { return s.hasPendingDatagrams(); }));
+    };
+    QTest::qWait(600);
+    QVERIFY2(reached() >= 1 && reached() < 5, qPrintable(QString::number(reached())));
+
+    // Lifting the limit while running releases the rest at once.
+    engine->setContactLimit(0);
+    QCOMPARE(engine->contactLimit(), 0);
+    QTRY_COMPARE_WITH_TIMEOUT(reached(), 5, 2000);
+
     pingBurst("b", 10);
     const auto [freeReplies, freeBytes] = collectReplies("b", 800);
     Q_UNUSED(freeBytes);

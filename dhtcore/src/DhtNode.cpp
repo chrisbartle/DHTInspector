@@ -30,7 +30,7 @@ QByteArray sortKeyFor(Family family, bool hasId, const NodeId &id, const NodeId 
 
 } // namespace
 
-DhtNode::DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, SendBudget *budget,
+DhtNode::DhtNode(const NodeConfig &config, PeerStorage *storage, ItemStorage *items, ContactBudget *budget,
                  QObject *parent)
     : QObject(parent)
     , m_config(config)
@@ -132,8 +132,6 @@ bool DhtNode::sendDatagram(const QByteArray &data, const Endpoint &to)
         return false;
     ++m_stats.packetsOut;
     m_stats.bytesOut += data.size();
-    if (m_budget)
-        m_budget->spend(data.size(), nowMs());
     return true;
 }
 
@@ -154,17 +152,6 @@ void DhtNode::sendQuery(const Endpoint &to, const QByteArray &method, BValue::Di
                          callback(reply);
                  },
                  timeoutMs, std::move(onSent));
-}
-
-bool DhtNode::budgetAllowsReply()
-{
-    // Over the send limit, incoming queries go unanswered, as libtorrent
-    // does with dht_upload_rate_limit. Our own queries wait instead, since
-    // dropping them would make a healthy node look dead.
-    if (!m_budget || m_budget->available(nowMs()))
-        return true;
-    ++m_stats.repliesShed;
-    return false;
 }
 
 void DhtNode::sendResponse(const krpc::Message &query, const Endpoint &to, BValue::Dict values)
@@ -228,11 +215,6 @@ void DhtNode::handleQuery(const krpc::Message &message, const Endpoint &from, co
         ++m_stats.readOnlyDropped;
         return;
     }
-
-    // Over the send limit we could not answer, so the query is dropped
-    // before it changes anything.
-    if (!budgetAllowsReply())
-        return;
 
     const auto senderId = message.senderId();
     if (!senderId) {

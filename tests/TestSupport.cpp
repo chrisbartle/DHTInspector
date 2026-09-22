@@ -18,9 +18,10 @@ private slots:
     void storageExpiresPeers();
     void storagePeerCap();
     void rateLimiterRefills();
-    void sendBudgetUnlimitedByDefault();
-    void sendBudgetOverdrawsOnceThenWaits();
-    void sendBudgetChangesLive();
+    void contactBudgetUnlimitedByDefault();
+    void contactBudgetChargesOnlyNewEndpoints();
+    void contactBudgetChangesLive();
+    void contactBudgetForgetsOldEndpoints();
 };
 
 void TestSupport::tokensValidateForTenMinutes()
@@ -145,50 +146,97 @@ void TestSupport::rateLimiterRefills()
     QVERIFY(limiter.allow(QHostAddress(QStringLiteral("203.0.113.2")), 0));
 }
 
-void TestSupport::sendBudgetUnlimitedByDefault()
+namespace {
+
+Endpoint host(int n)
 {
-    SendBudget budget;
+    return Endpoint(QHostAddress(QStringLiteral("203.0.113.%1").arg(n)), 6881);
+}
+
+} // namespace
+
+void TestSupport::contactBudgetUnlimitedByDefault()
+{
+    ContactBudget budget;
     QVERIFY(!budget.isLimited());
-    budget.spend(1'000'000, 0);
-    QVERIFY(budget.available(0));
+    for (int i = 1; i < 50; ++i) {
+        QVERIFY(budget.allows(host(i), 0));
+        budget.record(host(i), 0);
+    }
+    QVERIFY(budget.allows(host(99), 0));
+    // Counted even when nothing is charged, so the load can be shown.
+    QCOMPARE(budget.contacts(), qint64(49));
+    QCOMPARE(budget.tracked(), 49);
 }
 
-void TestSupport::sendBudgetOverdrawsOnceThenWaits()
+// Only an endpoint the router is not already tracking costs anything.
+void TestSupport::contactBudgetChargesOnlyNewEndpoints()
 {
-    SendBudget budget;
-    budget.setLimit(1000, 0);  // starts with a full second
+    ContactBudget budget;
+    budget.setLimit(2, 0);  // starts with a full second
 
-    budget.spend(600, 0);
-    QVERIFY(budget.available(0));
-    budget.spend(600, 0);  // one datagram may overdraw
-    QVERIFY(!budget.available(0));
-    QVERIFY(!budget.available(150));  // back to -50
-    QVERIFY(budget.available(250));   // +50
+    budget.record(host(1), 0);
+    budget.record(host(2), 0);
+    QVERIFY(!budget.allows(host(3), 0));
 
-    // Idle time saves up at most one second.
-    QVERIFY(budget.available(60'000));
-    budget.spend(1000, 60'000);
-    QVERIFY(!budget.available(60'000));
+    // The endpoints already contacted stay free, however often we write.
+    for (int i = 0; i < 5; ++i) {
+        QVERIFY(budget.allows(host(1), 0));
+        budget.record(host(1), 0);
+    }
+    QCOMPARE(budget.contacts(), qint64(2));
+    // A different port is a different conversation to a router.
+    QVERIFY(!budget.allows(Endpoint(host(1).address, 6882), 0));
+
+    QVERIFY(!budget.allows(host(3), 400));   // 0.8 of a contact refilled
+    QVERIFY(budget.allows(host(3), 500));
+    budget.record(host(3), 500);
+    QVERIFY(!budget.allows(host(4), 500));
+
+    // Idle time saves up at most one second's worth.
+    QVERIFY(budget.allows(host(4), 60'000));
+    budget.record(host(4), 60'000);
+    budget.record(host(5), 60'000);
+    QVERIFY(!budget.allows(host(6), 60'000));
 }
 
-void TestSupport::sendBudgetChangesLive()
+void TestSupport::contactBudgetChangesLive()
 {
-    SendBudget budget;
-    budget.setLimit(1000, 0);
-    budget.spend(1500, 0);
-    QVERIFY(!budget.available(0));
+    ContactBudget budget;
+    budget.setLimit(1, 0);
+    budget.record(host(1), 0);
+    QVERIFY(!budget.allows(host(2), 0));
 
     // Raising the limit refills faster from where it stands...
-    budget.setLimit(10'000, 0);
-    QVERIFY(budget.available(60));
+    budget.setLimit(100, 0);
+    QVERIFY(budget.allows(host(2), 20));
     // ...lowering it caps what is saved up...
-    budget.setLimit(100, 60);
-    budget.spend(100, 60);
-    QVERIFY(!budget.available(60));
+    budget.setLimit(1, 20);
+    budget.record(host(2), 20);
+    QVERIFY(!budget.allows(host(3), 20));
     // ...and lifting it altogether ends any wait.
-    budget.setLimit(0, 60);
-    QVERIFY(budget.available(60));
-    QCOMPARE(budget.limit(), qint64(0));
+    budget.setLimit(0, 20);
+    QVERIFY(budget.allows(host(3), 20));
+    QCOMPARE(budget.limit(), 0);
+}
+
+// Once a router would have dropped its entry, the endpoint is new again.
+void TestSupport::contactBudgetForgetsOldEndpoints()
+{
+    ContactBudget budget;
+    budget.setLimit(1, 0);
+    budget.record(host(1), 0);
+
+    const qint64 later = ContactBudget::WindowMs + 1;
+    QVERIFY(budget.allows(host(1), later));
+    budget.record(host(1), later);
+    QCOMPARE(budget.contacts(), qint64(2));
+    QVERIFY(!budget.allows(host(2), later));
+
+    budget.prune(later);
+    QCOMPARE(budget.tracked(), 1);
+    budget.prune(later + ContactBudget::WindowMs);
+    QCOMPARE(budget.tracked(), 0);
 }
 
 int runTestSupport(int argc, char **argv)

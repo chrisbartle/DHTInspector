@@ -10,6 +10,7 @@
 #include "dhtcore/NodeCatalog.h"
 #include "dhtcore/NodeList.h"
 #include "dhtcore/Snapshot.h"
+#include "dhtcore/Support.h"
 
 #include <QElapsedTimer>
 #include <QObject>
@@ -44,7 +45,8 @@ class DhtController : public QObject
     Q_PROPERTY(bool portForwarding READ portForwarding WRITE setPortForwarding NOTIFY portForwardingChanged)
     Q_PROPERTY(bool bep42Enabled READ bep42Enabled WRITE setBep42Enabled NOTIFY bep42EnabledChanged)
     Q_PROPERTY(bool readOnlyMode READ readOnlyMode WRITE setReadOnlyMode NOTIFY readOnlyModeChanged)
-    Q_PROPERTY(int sendLimit READ sendLimit WRITE setSendLimit NOTIFY sendLimitChanged)
+    Q_PROPERTY(int contactLimit READ contactLimit WRITE setContactLimit NOTIFY contactLimitChanged)
+    Q_PROPERTY(int contactWindowSeconds READ contactWindowSeconds CONSTANT)
     Q_PROPERTY(bool monitoring READ monitoring WRITE setMonitoring NOTIFY monitoringChanged)
     Q_PROPERTY(int catalogCap READ catalogCap WRITE setCatalogCap NOTIFY catalogCapChanged)
     Q_PROPERTY(CrawlStatus crawl READ crawl NOTIFY snapshotChanged)
@@ -115,8 +117,9 @@ public:
     void setReadOnlyMode(bool enabled);
     // Bytes per second for everything we send; 0 is unlimited. Applies at
     // once, whether or not the engine is running.
-    int sendLimit() const { return m_sendLimit; }
-    void setSendLimit(int bytesPerSecond);
+    int contactLimit() const { return m_contactLimit; }
+    int contactWindowSeconds() const { return int(dht::ContactBudget::WindowMs / 1000); }
+    void setContactLimit(int contactsPerSecond);
 
     // Global Health. Monitoring needs a running engine; switching it off
     // pauses the scan, stopping the engine discards what it found.
@@ -252,7 +255,7 @@ signals:
     void historyChanged();
     void bep42EnabledChanged();
     void readOnlyModeChanged();
-    void sendLimitChanged();
+    void contactLimitChanged();
     void monitoringChanged();
     void catalogCapChanged();
     void statsFamilyChanged();
@@ -299,7 +302,7 @@ private:
     bool m_portForwarding = false;
     bool m_bep42Enabled = true;
     bool m_readOnlyMode = false;
-    int m_sendLimit = 0;
+    int m_contactLimit = 0;
     bool m_monitoring = false;
     int m_catalogCap = dht::NodeCatalog::DefaultCap;
     CrawlStatus m_crawl;
@@ -341,6 +344,7 @@ private:
         qint64 bytesOut;
         qint64 crawlQueries;
         qint64 crawlAnswers;
+        qint64 newContacts;
     };
     std::deque<TrafficSample> m_traffic;
     QElapsedTimer m_trafficClock;
