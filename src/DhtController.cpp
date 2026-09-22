@@ -528,6 +528,7 @@ QVariantMap statsMap(const dht::NetworkStats &s, int shownClients, int shownVers
         {QStringLiteral("listsBogons"), feature(s.listsBogons)},
         {QStringLiteral("inventsPeers"), feature(s.inventsPeers)},
         {QStringLiteral("bep51SamplesMedian"), s.bep51SamplesMedian},
+        {QStringLiteral("bep51SamplesMean"), s.bep51SamplesMean},
         {QStringLiteral("unknown"), QVariantMap{
             {QStringLiteral("tested"), unknownTested},
             {QStringLiteral("error204"), s.answers204.yes},
@@ -1104,6 +1105,7 @@ void DhtController::exportSummary(const QUrl &file)
         {QStringLiteral("application"), QStringLiteral("DHT Inspector %1").arg(QCoreApplication::applicationVersion())},
         {QStringLiteral("countedBy"), QStringLiteral("IP address")},
         {QStringLiteral("sizeEstimates"), m_sizeEstimates},
+        {QStringLiteral("infohashEstimate"), m_infohashEstimate},
         {QStringLiteral("lookupPerformance"), m_lookupPerformance},
         {QStringLiteral("history"), m_historySource ? historyMap(*m_historySource, 10) : QVariantMap{}},
         {QStringLiteral("census"), m_census},
@@ -1357,6 +1359,7 @@ void DhtController::resetStatus()
     m_stats = EngineStatistics{};
     m_crawl = CrawlStatus{};
     m_sizeEstimates.clear();
+    m_infohashEstimate.clear();
     m_lookupPerformance.clear();
     m_historySource.reset();
     m_history = historyMap({}, ShownHistoryClients);
@@ -1439,6 +1442,53 @@ void DhtController::applySnapshot(const dht::EngineSnapshot &snapshot)
     };
     addEstimate(QStringLiteral("IPv4"), c.sizeV4, c.stats ? &c.stats->ipv4 : nullptr, true);
     addEstimate(QStringLiteral("IPv6"), c.sizeV6, c.stats ? &c.stats->ipv6 : nullptr, snapshot.ipv6.enabled);
+
+    // Infohashes held across each network. The size, in nodes, comes from
+    // the precise count when there is one (addresses, times the nodes per
+    // address the scan sees), since the quick estimate reads high.
+    QVariantList infohashFamilies;
+    double ipv4Nodes = 0;
+    const auto addInfohashes = [&](const QString &family, const dht::CensusTotal &census,
+                                   const dht::SizeEstimate &quick, const dht::NetworkStats *stats, bool enabled) {
+        if (!enabled || !stats)
+            return;
+        const double perIp = stats->nodesPerIp();
+        const bool counted = census.slices > 0 && census.connected > 0;
+        const double nodes = counted ? census.connected * perIp : quick.median;
+        const double nodesLow = counted ? census.connectedLow * perIp : quick.low;
+        const double nodesHigh = counted ? census.connectedHigh * perIp : quick.high;
+        if (family == QLatin1String("IPv4"))
+            ipv4Nodes = nodes;
+        const dht::StoredInfohashEstimate e = dht::estimateStoredInfohashes(*stats, nodes, nodesLow, nodesHigh);
+        infohashFamilies.append(QVariantMap{
+            {QStringLiteral("family"), family},
+            {QStringLiteral("valid"), e.valid},
+            {QStringLiteral("sizeSource"), counted ? QStringLiteral("count") : QStringLiteral("quick")},
+            {QStringLiteral("nodes"), nodes},
+            {QStringLiteral("reporting"), stats->bep51.yes},
+            {QStringLiteral("share"), stats->bep51.tested > 0 ? stats->bep51.yes / stats->bep51.tested : -1.0},
+            {QStringLiteral("mean"), stats->bep51SamplesMean},
+            {QStringLiteral("median"), stats->bep51SamplesMedian},
+            {QStringLiteral("low"), e.low},
+            {QStringLiteral("high"), e.high},
+            {QStringLiteral("lowBound"), e.lowBound},
+            {QStringLiteral("highBound"), e.highBound},
+        });
+    };
+    addInfohashes(QStringLiteral("IPv4"), snapshot.census.ipv4, c.sizeV4, c.stats ? &c.stats->ipv4 : nullptr, true);
+    addInfohashes(QStringLiteral("IPv6"), snapshot.census.ipv6, c.sizeV6, c.stats ? &c.stats->ipv6 : nullptr,
+                  snapshot.ipv6.enabled);
+    // This node as a sample of one: what the network would hold if every
+    // node stored as much. Against the IPv4 size, since most announcements
+    // arrive over IPv4.
+    const int own = snapshot.stats.storedInfohashes;
+    m_infohashEstimate = QVariantMap{
+        {QStringLiteral("families"), infohashFamilies},
+        {QStringLiteral("own"), own},
+        {QStringLiteral("ownCap"), dht::PeerStorage::MaxInfohashes},
+        {QStringLiteral("replicas"), dht::StoredInfohashEstimate::Replicas},
+        {QStringLiteral("ownEstimate"), ipv4Nodes > 0 ? own * ipv4Nodes / dht::StoredInfohashEstimate::Replicas : 0.0},
+    };
 
     m_lookupPerformance.clear();
     m_lookupPerformance.append(lookupMap(QStringLiteral("IPv4"), c.lookupV4));

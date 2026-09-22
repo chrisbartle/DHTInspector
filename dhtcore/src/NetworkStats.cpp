@@ -142,6 +142,23 @@ NetworkStats summarise(const Accumulator &a, const QHash<quint64, ClientInfo> &d
                 break;
             }
         }
+
+        // Weighted mean, and its standard error over the effective number
+        // of addresses the weights amount to.
+        double sum = 0;
+        double sumSquaredWeights = 0;
+        for (const auto &p : sorted) {
+            sum += p.second * p.first;
+            sumSquaredWeights += p.second * p.second;
+        }
+        const double mean = sum / total;
+        double variance = 0;
+        for (const auto &p : sorted)
+            variance += p.second * (p.first - mean) * (p.first - mean);
+        variance /= total;
+        const double effective = total * total / sumSquaredWeights;
+        s.bep51SamplesMean = mean;
+        s.bep51SamplesMeanError = effective > 1 ? std::sqrt(variance / (effective - 1)) : 0;
     }
 
     // Clients: by name, and by name and version.
@@ -398,6 +415,25 @@ NetworkStatsSet computeNetworkStats(const NodeCatalog &catalog, qint64 nowMs, in
     set.computedAtMs = nowMs;
     set.computeMs = int(timer.elapsed());
     return set;
+}
+
+StoredInfohashEstimate estimateStoredInfohashes(const NetworkStats &stats, double nodes, double nodesLow,
+                                                double nodesHigh)
+{
+    StoredInfohashEstimate out;
+    if (!(nodes > 0) || stats.bep51SamplesMean < 0 || !(stats.bep51.tested > 0))
+        return out;
+
+    const double share = stats.bep51.yes / stats.bep51.tested;
+    const double mean = stats.bep51SamplesMean;
+    const double margin = 1.96 * stats.bep51SamplesMeanError;
+    constexpr double k = StoredInfohashEstimate::Replicas;
+    out.valid = true;
+    out.low = nodes * share * mean / k;
+    out.high = nodes * mean / k;
+    out.lowBound = std::max(0.0, std::min(nodesLow, nodes) * share * (mean - margin) / k);
+    out.highBound = std::max(nodesHigh, nodes) * (mean + margin) / k;
+    return out;
 }
 
 double estimateNetworkSize(const NodeId &target, const std::vector<NodeId> &closest)

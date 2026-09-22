@@ -735,6 +735,92 @@ ScrollView {
             }
         }
 
+        // --- stored infohashes -----------------------------------------------
+        Panel {
+            id: infohashPanel
+
+            readonly property var e: DhtController.infohashEstimate
+            readonly property var families: e.families || []
+
+            Layout.fillWidth: true
+            title: qsTr("Stored Infohashes")
+            subtitle: qsTr("Roughly how many infohashes the network holds, from how many nodes report storing (BEP 51). Announcements expire after 30 minutes, so this counts torrents with a peer announcing them lately, not every torrent there is.")
+
+            Repeater {
+                model: infohashPanel.families
+
+                delegate: ColumnLayout {
+                    id: stored
+
+                    required property var modelData
+
+                    Layout.fillWidth: true
+                    spacing: 4
+
+                    RowLayout {
+                        spacing: Theme.spacingLarge
+
+                        Badge { text: stored.modelData.family; tone: Theme.textDim }
+
+                        Label {
+                            visible: !stored.modelData.valid
+                            text: !DhtController.monitoring
+                                  ? qsTr("switch Monitoring on to estimate")
+                                  : stored.modelData.nodes > 0 ? qsTr("waiting for nodes to answer sample_infohashes")
+                                                               : qsTr("waiting for a network size")
+                            color: Theme.textFaint
+                            font.pixelSize: Theme.fontSizeNormal
+                        }
+
+                        StatTile {
+                            visible: stored.modelData.valid
+                            Layout.fillWidth: false
+                            label: qsTr("Active infohashes")
+                            value: qsTr("%1 to %2").arg(page.big(stored.modelData.low)).arg(page.big(stored.modelData.high))
+                            detail: qsTr("95%: %1 to %2").arg(page.big(stored.modelData.lowBound)).arg(page.big(stored.modelData.highBound))
+                            tone: Theme.good
+                        }
+                        StatTile {
+                            visible: stored.modelData.valid
+                            Layout.fillWidth: false
+                            label: qsTr("Stored per BEP 51 node")
+                            value: qsTr("%1 on average").arg(page.count(stored.modelData.mean))
+                            detail: qsTr("median %1, from %2 addresses").arg(page.count(stored.modelData.median))
+                                    .arg(page.count(stored.modelData.reporting))
+                        }
+                        StatTile {
+                            visible: stored.modelData.valid
+                            Layout.fillWidth: false
+                            label: qsTr("Nodes supporting BEP 51")
+                            value: page.percent(stored.modelData.share)
+                            detail: qsTr("of about %1 nodes").arg(page.big(stored.modelData.nodes))
+                        }
+                    }
+
+                    Hint {
+                        visible: stored.modelData.valid
+                        text: qsTr("Each announcement goes to the %1 nodes closest to the infohash, so the total is nodes × average stored ÷ %1. Nodes without BEP 51 do not say what they hold: the low figure assumes they hold nothing, the high one that they hold as much as the rest. The network size is from the %2.")
+                              .arg(infohashPanel.e.replicas)
+                              .arg(stored.modelData.sizeSource === "count" ? qsTr("precise count") : qsTr("quick estimate, which reads high; a precise count above makes this better"))
+                    }
+                }
+            }
+
+            Hint {
+                visible: infohashPanel.families.length > 0 && infohashPanel.e.ownEstimate > 0
+                text: infohashPanel.e.own >= infohashPanel.e.ownCap
+                      ? qsTr("This node holds %1 infohashes, its limit, so it cannot serve as a check.")
+                        .arg(page.count(infohashPanel.e.own))
+                      : qsTr("This node holds %1 infohashes; were it typical, the IPv4 network would hold about %2. That is one sample, and a fair one only once the node has been up and reachable for well over 30 minutes.")
+                        .arg(page.count(infohashPanel.e.own)).arg(page.big(infohashPanel.e.ownEstimate))
+            }
+
+            EmptyState {
+                visible: infohashPanel.families.length === 0
+                message: qsTr("Start the engine and switch Monitoring on to estimate")
+            }
+        }
+
         // --- over time -----------------------------------------------------------
         Panel {
             id: historyPanel

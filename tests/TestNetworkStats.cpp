@@ -87,6 +87,7 @@ private slots:
     void emptyCatalogue();
     void countsAddressesNotNodes();
     void talliesFeaturesPerAddress();
+    void estimatesStoredInfohashes();
     void classifiesUnreachableAddresses();
     void measuresChurn();
 };
@@ -412,10 +413,34 @@ void TestNetworkStats::talliesFeaturesPerAddress()
     QCOMPARE(s.inventsPeers.yes, 0.5);
     // Weighted median of 100 (weight 1) and 300 (weight 0.5).
     QCOMPARE(s.bep51SamplesMedian, 100.0);
+    // And their weighted mean: (100 + 0.5 * 300) / 1.5.
+    QVERIFY(qFuzzyCompare(s.bep51SamplesMean, 250.0 / 1.5));
+    QVERIFY(s.bep51SamplesMeanError > 0);
 
     const NetworkStats none = computeNetworkStats(NodeCatalog(10), nowMs()).all;
     QCOMPARE(none.bep51.tested, 0.0);
     QCOMPARE(none.bep51SamplesMedian, -1.0);
+    QCOMPARE(none.bep51SamplesMean, -1.0);
+}
+
+// Nodes x mean stored / 8, from "only BEP 51 nodes store" up to "all do".
+void TestNetworkStats::estimatesStoredInfohashes()
+{
+    NetworkStats s;
+    s.bep51 = {10, 4};
+    s.bep51SamplesMean = 500;
+    s.bep51SamplesMeanError = 10;
+
+    const StoredInfohashEstimate e = estimateStoredInfohashes(s, 1e6, 0.9e6, 1.1e6);
+    QVERIFY(e.valid);
+    QVERIFY(qFuzzyCompare(e.low, 1e6 * 0.4 * 500 / 8));
+    QVERIFY(qFuzzyCompare(e.high, 1e6 * 500.0 / 8));
+    QVERIFY(qFuzzyCompare(e.lowBound, 0.9e6 * 0.4 * (500 - 19.6) / 8));
+    QVERIFY(qFuzzyCompare(e.highBound, 1.1e6 * (500 + 19.6) / 8));
+
+    QVERIFY(!estimateStoredInfohashes(s, 0, 0, 0).valid);
+    s.bep51SamplesMean = -1;
+    QVERIFY(!estimateStoredInfohashes(s, 1e6, 0.9e6, 1.1e6).valid);
 }
 
 void TestNetworkStats::classifiesUnreachableAddresses()

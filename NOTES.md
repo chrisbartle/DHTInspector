@@ -13,7 +13,7 @@ tests and releases work.
 | Setup tab | Working |
 | Search tab | Working: peer and item lookups, announce, BEP 44 publishing |
 | Data Store tab | Working: announced peers with addresses and expiry |
-| Global Health tab | Working: network scan, address counts, quick and precise size, statistics, feature checks, queries to us, suspicious groups, churn, lookup performance, charts over time, filterable node list with export |
+| Global Health tab | Working: network scan, address counts, quick and precise size, stored infohash estimate, statistics, feature checks, queries to us, suspicious groups, churn, lookup performance, charts over time, filterable node list with export |
 | Probe Node tab | Working: one node, any query, replies decoded in full |
 
 ## What the engine does
@@ -89,6 +89,16 @@ tests and releases work.
   in a slice given how many nodes it runs (Horvitz-Thompson), so busy hosts
   are not multiplied. Eight slices per family give a mean and a 95%
   interval.
+- Stored infohashes: an announcement goes to the 8 nodes closest to the
+  infohash, so the network holds about nodes x mean stored per node / 8.
+  The mean is of the `num` that BEP 51 nodes report, per address as
+  elsewhere; the node count is from the precise count when there is one,
+  else the quick estimate. Nodes without BEP 51 do not say what they hold,
+  so the result is a range: low if they hold nothing, high if they hold as
+  much as the BEP 51 nodes, widened to 95% bounds by the intervals on the
+  size and the mean. Announcements expire after 30 minutes, so this counts
+  torrents announced lately, not every torrent. This node's own count,
+  scaled the same way, is shown alongside as a sample of one.
 - Feature checks: every answering node is sent, one at a time and within
   the same per-host limit, `sample_infohashes` (BEP 51), `get` (BEP 44),
   `get_peers` for an infohash invented on the spot, and a query no DHT
@@ -147,7 +157,7 @@ tests and releases work.
   address was not contacted. Each address opens the node on the Probe tab.
 - Export, only when asked: every node matching the filters as CSV (written
   on a background thread, with feature results and signals), or the
-  statistics, size estimates, precise count, queries to us, suspicious
+  statistics, size estimates, stored infohash estimate, precise count, queries to us, suspicious
   groups, lookup performance and the session history as JSON. Nothing is saved otherwise.
 - BEP 43 read-only mode, off by default and switchable while running: every
   query we send carries `ro`, and every query we receive is dropped without a

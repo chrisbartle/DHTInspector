@@ -93,6 +93,8 @@ struct NetworkStats
     // for one. A floor: see CatalogEntry::InventsPeers.
     FeatureTally inventsPeers;
     double bep51SamplesMedian = -1;  // stored infohashes, over BEP 51 addresses
+    double bep51SamplesMean = -1;    // the same, averaged
+    double bep51SamplesMeanError = 0;  // standard error of that average
 
     // Listed addresses that cannot be contacted, by reason. Port 0 counts
     // addresses listed with that port, even if listed with others too.
@@ -131,6 +133,34 @@ int histogramQuantile(const std::vector<double> &histogram, double total, double
 // and complete lookups, which the real network does not guarantee, so it
 // is a rough figure. Returns 0 with fewer than four nodes.
 double estimateNetworkSize(const NodeId &target, const std::vector<NodeId> &closest);
+
+// How many infohashes the network holds, from the "num" that BEP 51 nodes
+// report. An announcement goes to the K nodes closest to the infohash, so
+// each active infohash is stored about K times over, and the network holds
+// about (nodes x mean stored per node) / K. Announcements expire after 30
+// minutes, so this counts infohashes announced within about that long:
+// torrents with an active peer, not every torrent there is.
+//
+// Only BEP 51 nodes say how much they store, and the rest can hold
+// anything from nothing to as much, so the answer is a range: low assumes
+// only the BEP 51 share of nodes stores anything, high that every node
+// stores as much as the BEP 51 nodes do. The bounds widen that range by
+// the 95% intervals on the network size and on the mean.
+struct StoredInfohashEstimate
+{
+    static constexpr int Replicas = 8;
+
+    bool valid = false;
+    double low = 0;
+    double high = 0;
+    double lowBound = 0;
+    double highBound = 0;
+};
+
+// nodes, nodesLow and nodesHigh: the network size in nodes, with its 95%
+// interval; stats: the same family's statistics.
+StoredInfohashEstimate estimateStoredInfohashes(const NetworkStats &stats, double nodes, double nodesLow,
+                                                double nodesHigh);
 
 struct SizeEstimate
 {
